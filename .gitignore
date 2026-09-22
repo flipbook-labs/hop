@@ -1,0 +1,4 @@
+build/
+packages/
+loom.lock.luau
+.DS_Store

@@ -1,0 +1,40 @@
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      upload-artifacts:
+        description: Package and upload the compiled binary.
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: CompeyDev/setup-rokit@1d9390883f7ebce19d48f5b8d006e11d387c92ab # v0.2.1
+        with:
+          version: v1.2.0
+
+      - name: Install dependencies
+        run: lute run install
+
+      - name: Build
+        run: lute run build
+
+      - name: Smoketest
+        run: build/hop --help
+
+      - name: Package binary
+        if: inputs.upload-artifacts
+        run: zip -j hop-macos-aarch64.zip build/hop
+
+      - name: Upload artifact
+        if: inputs.upload-artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: asset-macos
+          path: hop-macos-aarch64.zip
