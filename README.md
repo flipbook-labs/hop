@@ -22,18 +22,21 @@ rokit add --global flipbook-labs/hop
 ## Commands
 
 ```text
+hop <expr>
+hop to <expr>
+hop list [--refresh] [--no-pr] [--json]
 hop recent [--limit N] [--repo OWNER/REPO] [--agent cursor|claude] [--json]
-hop go [NUMBER|QUERY]
-hop pr <URL|NUMBER>
 hop cursor [NUMBER|QUERY]
 hop help
 ```
 
+`hop <expr>` is shorthand for `hop to <expr>`, which opens the matching worktree with `code <folder>`. An expression is a pull request (`owner/repo#123`, `repo#123`, `#123`, `123`, or a PR URL) or a query that matches branches, repositories, folder names, and PR titles. Ambiguous results use a numbered terminal picker. A PR without a local worktree is reported with its URL.
+
+`hop list` shows every discovered worktree with its associated pull request, plus open pull requests that have no local worktree. Results are cached in `~/.hop/cache/worktrees.json`. `--refresh` rediscovers worktrees and looks up each worktree's pull request by branch, plus your open pull requests in the same repositories, using concurrent batched GitHub queries. `hop to` refreshes the cache once when nothing matches. `--no-pr` skips GitHub and does not update the cache. `--json` prints the same data for tools such as editor integrations.
+
 `hop recent` merges active top-level Cursor sessions with Claude Code JSONL sessions and sorts them by last activity. Cursor metadata is queried from its SQLite database in read-only mode. If either provider is unavailable, Hop continues with the other provider.
 
-`hop go` opens a folder with `code <folder>`. `hop pr` resolves a GitHub PR with `gh` and reports an error when its branch has no local worktree. `hop cursor` runs `agent --workspace <folder> --resume <composer-id>`.
-
-Ambiguous results use a numbered terminal picker.
+`hop cursor` runs `agent --workspace <folder> --resume <composer-id>`.
 
 ## Configuration
 
