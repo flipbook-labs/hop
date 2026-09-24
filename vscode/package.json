@@ -1,0 +1,56 @@
+{
+	"name": "hop",
+	"displayName": "Hop",
+	"description": "Search worktrees and pull requests and switch between them inside one VS Code window.",
+	"publisher": "flipbook-labs",
+	"version": "0.0.0",
+	"private": true,
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/flipbook-labs/hop"
+	},
+	"engines": {
+		"vscode": "^1.100.0"
+	},
+	"main": "./out/extension.js",
+	"activationEvents": [
+		"onStartupFinished",
+		"onUri"
+	],
+	"contributes": {
+		"commands": [
+			{
+				"command": "hop.go",
+				"title": "Go",
+				"category": "Hop"
+			},
+			{
+				"command": "hop.refresh",
+				"title": "Refresh Worktrees",
+				"category": "Hop"
+			}
+		],
+		"configuration": {
+			"title": "Hop",
+			"properties": {
+				"hop.path": {
+					"type": "string",
+					"default": "",
+					"description": "Path to the hop executable. Defaults to the copy bundled with the extension, then `hop` on PATH."
+				}
+			}
+		}
+	},
+	"scripts": {
+		"compile": "tsc -p .",
+		"test": "tsc -p . && node --test out/test/*.test.js",
+		"package": "node scripts/package.mjs"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"@types/vscode": "~1.100.0",
+		"@vscode/vsce": "^3.6.0",
+		"typescript": "^5.9.0"
+	}
+}
