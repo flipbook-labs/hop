@@ -32,7 +32,7 @@ hop help
 
 `hop <expr>` is shorthand for `hop to <expr>`, which opens the matching worktree with `code <folder>`. An expression is a pull request (`owner/repo#123`, `repo#123`, `#123`, `123`, or a PR URL) or a query that matches branches, repositories, folder names, and PR titles. Ambiguous results use a numbered terminal picker. A PR without a local worktree is reported with its URL.
 
-`hop list` shows every discovered worktree with its associated pull request, plus open pull requests that have no local worktree. Results are cached in `~/.hop/cache/worktrees.json`. `--refresh` rediscovers worktrees and queries GitHub with one `gh pr list` per repository. `hop to` refreshes the cache once when nothing matches. `--no-pr` skips GitHub and does not update the cache. `--json` prints the same data for tools such as editor integrations.
+`hop list` shows every discovered worktree with its associated pull request, plus open pull requests that have no local worktree. Results are cached in `~/.hop/cache/worktrees.json`. `--refresh` rediscovers worktrees and queries GitHub in concurrent batches of repositories. `hop to` refreshes the cache once when nothing matches. `--no-pr` skips GitHub and does not update the cache. `--json` prints the same data for tools such as editor integrations.
 
 `hop recent` merges active top-level Cursor sessions with Claude Code JSONL sessions and sorts them by last activity. Cursor metadata is queried from its SQLite database in read-only mode. If either provider is unavailable, Hop continues with the other provider.
 

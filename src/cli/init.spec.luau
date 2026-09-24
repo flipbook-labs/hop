@@ -52,11 +52,11 @@ local function baseDependencies(write: (string) -> ()): cli.Dependencies
 	return {
 		write = write,
 		runner = function(argv)
-			if argv[1] == "gh" and argv[3] == "list" then
+			if argv[1] == "gh" and argv[3] == "graphql" then
 				return {
 					ok = true,
 					exitCode = 0,
-					stdout = '[{"number":42,"headRefName":"feature/hop","url":"https://github.com/example/widgets/pull/42"}]',
+					stdout = '{"data":{"repository1":{"pullRequests":{"nodes":[{"number":42,"headRefName":"feature/hop","url":"https://github.com/example/widgets/pull/42"}]}}}}',
 					stderr = "",
 				}
 			end
@@ -118,8 +118,9 @@ local function memoryCache(initial: snapshot.Snapshot?): (cache.Cache, { snapsho
 		writes
 end
 
-local pullRequestList = '[{"number":42,"title":"Add the hop command","headRefName":"feature/hop","url":"https://github.com/example/widgets/pull/42","state":"OPEN","isDraft":false},'
-	.. '{"number":43,"title":"Orphaned idea","headRefName":"elsewhere","url":"https://github.com/example/widgets/pull/43","state":"OPEN","isDraft":true}]'
+local pullRequestList = '{"data":{"repository1":{"pullRequests":{"nodes":['
+	.. '{"number":42,"title":"Add the hop command","headRefName":"feature/hop","url":"https://github.com/example/widgets/pull/42","state":"OPEN","isDraft":false},'
+	.. '{"number":43,"title":"Orphaned idea","headRefName":"elsewhere","url":"https://github.com/example/widgets/pull/43","state":"OPEN","isDraft":true}]}}}}'
 
 local function toDependencies(
 	commands: { { string } },

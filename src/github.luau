@@ -1,9 +1,15 @@
 local json = require("@std/json")
+local task = require("@std/task")
 
 local defaultRun = require("@root/command")
 local types = require("@root/types")
 
 export type PullRequest = types.PullRequest
+
+local BATCH_SIZE = 10
+local CONCURRENCY = 5
+local PULL_REQUEST_FIELDS =
+	"pullRequests(first: 100, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { number title url headRefName state isDraft } }"
 
 local STATE_RANK: { [string]: number } = {
 	OPEN = 3,
@@ -40,34 +46,84 @@ local function parsePullRequest(value: json.Value, repository: string): PullRequ
 	}
 end
 
-local function listPullRequests(repositories: { string }, runner: types.CommandRunner?): { PullRequest }
-	local run = runner or defaultRun
+local function batchCommand(batch: { string }): { string }
+	local declarations: { string } = {}
+	local selections: { string } = {}
+	local argv = { "gh", "api", "graphql" }
+	for index, repository in batch do
+		local owner, name = repository:match("^([^/]+)/([^/]+)$")
+		table.insert(declarations, `$owner{index}: String!, $name{index}: String!`)
+		table.insert(
+			selections,
+			`repository{index}: repository(owner: $owner{index}, name: $name{index}) \{ {PULL_REQUEST_FIELDS} }`
+		)
+		table.insert(argv, "-f")
+		table.insert(argv, `owner{index}={owner or ""}`)
+		table.insert(argv, "-f")
+		table.insert(argv, `name{index}={name or ""}`)
+	end
+	table.insert(argv, "-f")
+	table.insert(argv, `query=query({table.concat(declarations, ", ")}) \{ {table.concat(selections, " ")} }`)
+	return argv
+end
+
+-- gh exits non-zero when any repository in a batch fails but still prints the others' data.
+local function fetchBatch(batch: { string }, run: types.CommandRunner): { PullRequest }
 	local result: { PullRequest } = {}
-	for _, repository in repositories do
-		local ok, response = pcall(run, {
-			"gh",
-			"pr",
-			"list",
-			"--repo",
-			repository,
-			"--state",
-			"all",
-			"--limit",
-			"100",
-			"--json",
-			"number,title,url,headRefName,state,isDraft",
-		})
-		if not ok or not response.ok then
-			continue
-		end
-		local decodedOk, decoded = pcall(json.deserialize, response.stdout)
-		local values = if decodedOk then json.asArray(decoded) else nil
-		for _, value in values or {} do
+	local ok, response = pcall(run, batchCommand(batch))
+	if not ok then
+		return result
+	end
+	local decodedOk, decoded = pcall(json.deserialize, response.stdout)
+	local body = if decodedOk then json.asObject(decoded) else nil
+	local data = if body then json.asObject(body.data) else nil
+	if data == nil then
+		return result
+	end
+	for index, repository in batch do
+		local repositoryObject = json.asObject(data[`repository{index}`])
+		local connection = if repositoryObject then json.asObject(repositoryObject.pullRequests) else nil
+		local nodes = if connection then json.asArray(connection.nodes) else nil
+		for _, value in nodes or {} do
 			local pullRequest = parsePullRequest(value, repository)
 			if pullRequest then
 				table.insert(result, pullRequest)
 			end
 		end
+	end
+	return result
+end
+
+-- Batches share one GraphQL request each and run concurrently, since each gh call costs about a second.
+local function listPullRequests(repositories: { string }, runner: types.CommandRunner?): { PullRequest }
+	local run = runner or defaultRun
+	local batches: { { string } } = {}
+	for start = 1, #repositories, BATCH_SIZE do
+		table.insert(batches, { table.unpack(repositories, start, math.min(start + BATCH_SIZE - 1, #repositories)) })
+	end
+
+	local results: { { PullRequest } } = {}
+	local nextBatch = 1
+	local active = 0
+	local function work()
+		while nextBatch <= #batches do
+			local index = nextBatch
+			nextBatch += 1
+			results[index] = fetchBatch(batches[index], run)
+		end
+		active -= 1
+	end
+	for _ = 1, math.min(CONCURRENCY, #batches) do
+		active += 1
+		task.spawn(work)
+	end
+	while active > 0 do
+		task.wait(0.05)
+	end
+
+	local result: { PullRequest } = {}
+	for _, batch in results do
+		table.move(batch, 1, #batch, #result + 1, result)
 	end
 	return result
 end
