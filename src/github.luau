@@ -122,7 +122,8 @@ local function fetchBranches(batch: { Lookup }, run: types.CommandRunner): { Pul
 end
 
 -- The viewer's open PRs in known repositories, so in-flight work without a worktree still shows up.
-local function fetchAuthored(repositories: { [string]: boolean }, run: types.CommandRunner): { PullRequest }
+-- `repositories` maps lowercase names to the worktree's spelling, since remotes need not match GitHub's case.
+local function fetchAuthored(repositories: { [string]: string }, run: types.CommandRunner): { PullRequest }
 	local result: { PullRequest } = {}
 	local cursor: string? = nil
 	for _ = 1, AUTHORED_PAGES do
@@ -148,8 +149,9 @@ local function fetchAuthored(repositories: { [string]: boolean }, run: types.Com
 		for _, value in nodes(connection) do
 			local object = json.asObject(value)
 			local owner = if object then json.asObject(object.repository) else nil
-			local repository = if owner then owner.nameWithOwner else nil
-			if type(repository) == "string" and repositories[repository] then
+			local nameWithOwner = if owner then owner.nameWithOwner else nil
+			local repository = if type(nameWithOwner) == "string" then repositories[nameWithOwner:lower()] else nil
+			if repository then
 				local pullRequest = parsePullRequest(value, repository)
 				if pullRequest then
 					table.insert(result, pullRequest)
@@ -198,7 +200,7 @@ end
 -- PRs for the given worktrees' branches, plus the viewer's open PRs in the same repositories.
 local function listPullRequests(worktrees: { types.Worktree }, runner: types.CommandRunner?): { PullRequest }
 	local run = runner or defaultRun
-	local repositories: { [string]: boolean } = {}
+	local repositories: { [string]: string } = {}
 	local lookups: { Lookup } = {}
 	local seen: { [string]: boolean } = {}
 	for _, worktree in worktrees do
@@ -207,7 +209,7 @@ local function listPullRequests(worktrees: { types.Worktree }, runner: types.Com
 		if repository == nil then
 			continue
 		end
-		repositories[repository] = true
+		repositories[repository:lower()] = repositories[repository:lower()] or repository
 		if branch and not seen[pullRequestKey(repository, branch)] then
 			seen[pullRequestKey(repository, branch)] = true
 			table.insert(lookups, { repository = repository, branch = branch })
