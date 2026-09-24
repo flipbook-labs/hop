@@ -225,6 +225,26 @@ test.case("to picks from ambiguous matches with the numbered picker", function(a
 	assert.eq(lastCommand(commands)[2], "/src/widgets-feature")
 end)
 
+test.case("to opens a repository's default-branch checkout by keyword", function(assert)
+	local commands: { { string } } = {}
+	cli.execute({ "widgets", "default" }, (toDependencies(commands, {})))
+	assert.eq(lastCommand(commands)[2], "/src/widgets")
+end)
+
+test.case("to lists the most recently used matches first", function(assert)
+	for _, recent in { "/src/widgets", "/src/widgets-feature" } do
+		local commands: { { string } } = {}
+		local output: { string } = {}
+		local dependencies = toDependencies(commands, output)
+		dependencies.activity = function(worktree)
+			return if tostring(worktree.path) == recent then 20 else 10
+		end
+		cli.execute({ "example" }, dependencies)
+		assert.strContains(output[1], `1. widgets · {if recent == "/src/widgets" then "main" else "feature/hop"}`)
+		assert.eq(lastCommand(commands)[2], if recent == "/src/widgets" then "/src/widgets-feature" else "/src/widgets")
+	end
+end)
+
 test.case("to refreshes a stale cache once before giving up", function(assert)
 	local commands: { { string } } = {}
 	local stale = snapshot.build({ worktrees[1] }, {}, 0)
@@ -270,6 +290,23 @@ test.case("list --json serves the cache and --refresh rebuilds it", function(ass
 	assert.eq(pr.title, "Add the hop command")
 	assert.eq(repository.name, "widgets")
 	assert.eq(repository.remote, "example/widgets")
+end)
+
+test.case("list --json reports the default branch and live activity", function(assert)
+	local output: { string } = {}
+	local dependencies = toDependencies({}, output)
+	dependencies.activity = function(worktree)
+		return if tostring(worktree.path) == "/src/widgets" then 50 else 10
+	end
+	cli.execute({ "list", "--json" }, dependencies)
+	local value = json.asObject(json.deserialize(output[1])) or error("expected JSON object")
+	local items = json.asArray(value.worktrees) or error("expected worktrees")
+	local primary = json.asObject(items[1]) or error("expected worktree")
+	local feature = json.asObject(items[2]) or error("expected worktree")
+	assert.eq(primary.onDefaultBranch, true)
+	assert.eq(primary.lastActivity, 50)
+	assert.eq(feature.onDefaultBranch, false)
+	assert.eq(feature.lastActivity, 10)
 end)
 
 test.case("list --no-pr skips gh and leaves the cache alone", function(assert)

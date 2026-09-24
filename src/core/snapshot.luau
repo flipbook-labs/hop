@@ -67,6 +67,17 @@ local function repositoryName(worktree: types.Worktree): string
 	return root:gsub("/+$", ""):match("([^/]+)$") or root
 end
 
+-- Repositories without an `origin/HEAD` fall back to the conventional default branch names.
+local function isDefaultBranch(worktree: types.Worktree): boolean
+	local branch = worktree.branch
+	if branch == nil then
+		return false
+	elseif worktree.defaultBranch then
+		return branch == worktree.defaultBranch
+	end
+	return branch == "main" or branch == "master"
+end
+
 local function pullRequestJson(pullRequest: types.PullRequest): json.Object
 	return {
 		repository = pullRequest.repository,
@@ -79,7 +90,8 @@ local function pullRequestJson(pullRequest: types.PullRequest): json.Object
 	}
 end
 
-local function toJson(snapshot: Snapshot): json.Object
+-- `activity` adds each worktree's last use, which changes too often to cache.
+local function toJson(snapshot: Snapshot, activity: ((types.Worktree) -> number)?): json.Object
 	local worktrees: json.Array = {}
 	for _, entry in snapshot.entries do
 		local worktree = entry.worktree
@@ -87,6 +99,7 @@ local function toJson(snapshot: Snapshot): json.Object
 			name = repositoryName(worktree),
 			root = worktree.root,
 			remote = worktree.repository,
+			defaultBranch = worktree.defaultBranch,
 		}
 		local item: json.Object = {
 			repository = repository,
@@ -94,6 +107,8 @@ local function toJson(snapshot: Snapshot): json.Object
 			branch = worktree.branch,
 			head = worktree.head,
 			primary = worktree.primary,
+			onDefaultBranch = isDefaultBranch(worktree),
+			lastActivity = if activity then activity(worktree) else nil,
 			pr = if entry.pullRequest then pullRequestJson(entry.pullRequest) else nil,
 		}
 		table.insert(worktrees, item)
@@ -170,6 +185,7 @@ local function fromJson(value: json.Value): Snapshot?
 				repository = optionalString(repository.remote),
 				root = optionalString(repository.root),
 				head = optionalString(worktreeObject.head),
+				defaultBranch = optionalString(repository.defaultBranch),
 				primary = worktreeObject.primary == true,
 			},
 			pullRequest = pullRequestFromJson(worktreeObject.pr),
@@ -189,6 +205,7 @@ end
 return table.freeze({
 	build = build,
 	fromJson = fromJson,
+	isDefaultBranch = isDefaultBranch,
 	repositories = repositories,
 	repositoryName = repositoryName,
 	toJson = toJson,

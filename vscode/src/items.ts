@@ -70,27 +70,83 @@ function compareWorktrees(left: HopWorktree, right: HopWorktree): number {
 	);
 }
 
-// Recently used worktrees first, then everything else by repository; the current one goes last.
-export function buildItems(list: HopList, recent: string[], currentPath: string | undefined, home: string): Item[] {
+// A query word that matches worktrees on their repository's default branch.
+const DEFAULT_KEYWORD = "default";
+
+function words(query: string): string[] {
+	return query.toLowerCase().split(/\s+/).filter((word) => word !== "");
+}
+
+function pullRequestFields(pullRequest: HopPullRequest): string[] {
+	return [pullRequest.title ?? "", `${repositoryName(pullRequest.repository)}#${pullRequest.number}`];
+}
+
+function worktreeFields(worktree: HopWorktree): string[] {
+	return [
+		worktree.branch ?? "",
+		worktree.path.split("/").pop() ?? "",
+		worktree.repository.name,
+		worktree.repository.remote ?? "",
+		...(worktree.pr ? pullRequestFields(worktree.pr) : []),
+	];
+}
+
+function everyWordMatches(fields: string[], queryWords: string[], isDefault = false): boolean {
+	const lowered = fields.map((field) => field.toLowerCase());
+	return queryWords.every(
+		(word) => (word === DEFAULT_KEYWORD && isDefault) || lowered.some((field) => field.includes(word)),
+	);
+}
+
+// A query naming a repository puts that repository's default-branch checkout first.
+function namesDefaultCheckout(worktree: HopWorktree, queryWords: string[]): boolean {
+	if (!worktree.onDefaultBranch) {
+		return false;
+	}
+	const names = [worktree.repository.name.toLowerCase(), worktree.repository.remote?.toLowerCase()];
+	return queryWords.some((word) => names.includes(word));
+}
+
+// Without a query: recently picked worktrees first, then everything else by repository.
+// With a query: every word must match a branch, folder, repository, or PR; a named repository's
+// default-branch checkout comes first, then the most recently used. The current worktree goes last.
+export function buildItems(
+	list: HopList,
+	recent: string[],
+	currentPath: string | undefined,
+	home: string,
+	query = "",
+): Item[] {
+	const queryWords = words(query);
 	const rank = new Map(recent.map((value, index) => [value, index]));
-	const worktrees = [...list.worktrees].sort((left, right) => {
-		const leftCurrent = left.path === currentPath;
-		const rightCurrent = right.path === currentPath;
-		if (leftCurrent !== rightCurrent) {
-			return leftCurrent ? 1 : -1;
-		}
-		const leftRank = rank.get(left.path) ?? Infinity;
-		const rightRank = rank.get(right.path) ?? Infinity;
-		if (leftRank !== rightRank) {
-			return leftRank - rightRank;
-		}
-		return compareWorktrees(left, right);
-	});
+	const worktrees = list.worktrees
+		.filter((worktree) => everyWordMatches(worktreeFields(worktree), queryWords, worktree.onDefaultBranch))
+		.sort((left, right) => {
+			const leftCurrent = left.path === currentPath;
+			const rightCurrent = right.path === currentPath;
+			if (leftCurrent !== rightCurrent) {
+				return leftCurrent ? 1 : -1;
+			}
+			if (queryWords.length > 0) {
+				const pinned = Number(namesDefaultCheckout(right, queryWords)) - Number(namesDefaultCheckout(left, queryWords));
+				const activity = (right.lastActivity ?? 0) - (left.lastActivity ?? 0);
+				return pinned || activity || compareWorktrees(left, right);
+			}
+			const leftRank = rank.get(left.path) ?? Infinity;
+			const rightRank = rank.get(right.path) ?? Infinity;
+			if (leftRank !== rightRank) {
+				return leftRank - rightRank;
+			}
+			return compareWorktrees(left, right);
+		});
+	const pullRequests = list.pullRequests.filter((pullRequest) =>
+		everyWordMatches(pullRequestFields(pullRequest), queryWords),
+	);
 
 	const items = worktrees.map((worktree) => worktreeItem(worktree, home, worktree.path === currentPath));
-	if (list.pullRequests.length > 0) {
+	if (pullRequests.length > 0) {
 		items.push({ label: "Pull requests without a worktree", separator: true });
-		items.push(...list.pullRequests.map(pullRequestItem));
+		items.push(...pullRequests.map(pullRequestItem));
 	}
 	return items;
 }

@@ -19,6 +19,9 @@ export interface HopWorktree {
 	branch?: string;
 	head?: string;
 	primary: boolean;
+	onDefaultBranch?: boolean;
+	// Seconds since the epoch that the worktree was last used.
+	lastActivity?: number;
 	pr?: HopPullRequest;
 }
 
