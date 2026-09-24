@@ -30,7 +30,7 @@ hop cursor [NUMBER|QUERY]
 hop help
 ```
 
-`hop <expr>` is shorthand for `hop to <expr>`, which opens the matching worktree with `code <folder>`. An expression is a pull request (`owner/repo#123`, `repo#123`, `#123`, `123`, or a PR URL) or a query that matches branches, repositories, folder names, and PR titles. Ambiguous results use a numbered terminal picker. A PR without a local worktree is reported with its URL.
+`hop <expr>` is shorthand for `hop to <expr>`, which opens the matching worktree. With the [VS Code extension](vscode/README.md) installed, the most recently focused VS Code window switches to it in place; otherwise Hop runs `code <folder>`. An expression is a pull request (`owner/repo#123`, `repo#123`, `#123`, `123`, or a PR URL) or a query that matches branches, repositories, folder names, and PR titles. Ambiguous results use a numbered terminal picker. A PR without a local worktree is reported with its URL.
 
 `hop list` shows every discovered worktree with its associated pull request, plus open pull requests that have no local worktree. Results are cached in `~/.hop/cache/worktrees.json`. `--refresh` rediscovers worktrees and looks up each worktree's pull request by branch, plus your open pull requests in the same repositories, using concurrent batched GitHub queries. `hop to` refreshes the cache once when nothing matches. `--no-pr` skips GitHub and does not update the cache. `--json` prints the same data for tools such as editor integrations.
 
