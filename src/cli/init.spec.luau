@@ -157,15 +157,48 @@ local function lastCommand(commands: { { string } }): { string }
 	return commands[#commands]
 end
 
-test.case("route defaults to help with no arguments and to `to` for expressions", function(assert)
-	assert.eq((cli.route({})), "help")
-	assert.eq((cli.route({ "--help" })), "help")
-	local command, trailing = cli.route({ "example/widgets#42" })
-	assert.eq(command, "to")
-	assert.eq(trailing[1], "example/widgets#42")
-	local listCommand, listArgs = cli.route({ "list", "--json" })
-	assert.eq(listCommand, "list")
-	assert.eq(listArgs[1], "--json")
+local function helpOutput(args: { string }): string
+	local output = ""
+	cli.execute(args, {
+		write = function(value)
+			output = value
+		end,
+	})
+	return output
+end
+
+test.case("no arguments, --help, -h, and help all print the root help", function(assert)
+	local expected = helpOutput({})
+	assert.strContains(expected, "Usage: hop <command>")
+	for _, args in { { "--help" }, { "-h" }, { "help" } } do
+		assert.eq(helpOutput(args), expected)
+	end
+end)
+
+test.case("command help comes from --help or help <command>", function(assert)
+	local output = helpOutput({ "list", "--help" })
+	assert.strContains(output, "Usage: hop list [options]")
+	assert.strContains(output, "--no-pr")
+	assert.eq(helpOutput({ "help", "list" }), output)
+end)
+
+test.case("help rejects unknown commands", function(assert)
+	local dependencies: cli.Dependencies = { write = function() end }
+	local ok, message = pcall(cli.execute, { "help", "nope" }, dependencies)
+	assert.eq(ok, false)
+	assert.strContains(tostring(message), "unknown command: nope")
+end)
+
+test.case("unknown options are rejected", function(assert)
+	local ok, message = pcall(cli.execute, { "list", "--bogus" }, (toDependencies({}, {})))
+	assert.eq(ok, false)
+	assert.strContains(tostring(message), "Unknown argument: bogus")
+end)
+
+test.case("expressions may contain command names after the first word", function(assert)
+	local ok, message = pcall(cli.execute, { "widgets", "list" }, (toDependencies({}, {})))
+	assert.eq(ok, false)
+	assert.strContains(tostring(message), 'nothing matches "widgets list"')
 end)
 
 test.case("bare expressions open the matching PR worktree", function(assert)
