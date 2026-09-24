@@ -27,8 +27,10 @@ hop to <expr>
 hop list [--refresh] [--no-pr] [--json]
 hop recent [--limit N] [--repo OWNER/REPO] [--agent cursor|claude] [--json]
 hop cursor [NUMBER|QUERY]
-hop help
+hop help [COMMAND]
 ```
+
+Every command accepts `--help` (or `-h`) to describe its options.
 
 `hop <expr>` is shorthand for `hop to <expr>`, which opens the matching worktree. With the [VS Code extension](vscode/README.md) installed, the most recently focused VS Code window switches to it in place; otherwise Hop runs `code <folder>`. An expression is a pull request (`owner/repo#123`, `repo#123`, `#123`, `123`, or a PR URL) or a query that matches branches, repositories, folder names, and PR titles. Ambiguous results use a numbered terminal picker. A PR without a local worktree is reported with its URL.
 

@@ -1,7 +1,9 @@
+local FlipbookBatteries = require("@flipbook-batteries")
 local fs = require("@std/fs")
 local project = require("@repo/project")
 local system = require("@std/system")
-local run = require("./common/run")
+
+local run = FlipbookBatteries.run
 
 local outputPath = tostring(project.BUILD_OUTPUT)
 local windowsOutputPath = outputPath .. ".exe"
@@ -20,8 +22,7 @@ if not fs.exists(project.BUILD_PATH) then
 	fs.createDirectory(project.BUILD_PATH, { makeParents = true })
 end
 
-run({
-	"lute",
+run("lute", {
 	"compile",
 	"cli.luau",
 	"--output",
