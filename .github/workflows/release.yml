@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force_publish:
+        description: Tag and create a draft release from the version on main.
+        type: boolean
+        default: false
+
+env:
+  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  lock:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
+      - uses: flipbook-labs/changewrite/publish-lock@v0.7.0
+        with:
+          locked: true
+          url: ${{ env.RUN_URL }}
+
+  build:
+    uses: ./.github/workflows/build.yml
+    with:
+      upload-artifacts: true
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
+    concurrency:
+      group: release-pr-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.FLIPBOOK_BACKEND_APP_ID }}
+          private-key: ${{ secrets.FLIPBOOK_BACKEND_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+          ref: main
+
+      - name: Download release assets
+        uses: actions/download-artifact@v8
+        with:
+          pattern: asset-*
+          path: assets
+          merge-multiple: true
+
+      - uses: flipbook-labs/changewrite@v0.7.0
+        id: changewrite
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pr-token: ${{ steps.app-token.outputs.token }}
+          force-publish: ${{ inputs.force_publish || false }}
+          base: main
+          branch: publish-next-version
+          post-draft-hook: |
+            "$CHANGEWRITE_BIN" attach --tag "$CHANGEWRITE_TAG" --files assets/*.zip
+          pr-title: Publish v{{version}}
+          pr-body: |
+            This PR prepares the next Hop release by updating its version and changelog.
+
+            Merging this PR creates tag `{{tag}}` and publishes its attached binary.
+
+            Next release: {{repo_url}}/releases/tag/{{tag}}
+
+      - name: Unlock the publish PR
+        if: github.event_name == 'push'
+        uses: flipbook-labs/changewrite/publish-lock@v0.7.0
+        with:
+          locked: false
+          url: ${{ env.RUN_URL }}
