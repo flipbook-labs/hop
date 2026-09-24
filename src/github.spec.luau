@@ -112,6 +112,22 @@ test.case("GitHub includes the viewer's open pull requests only for known reposi
 	assert.eq(pullRequests[2].number, 9)
 end)
 
+test.case("GitHub matches the viewer's pull requests to remotes regardless of case", function(assert)
+	local pullRequests = github.listPullRequests({ worktree("example/widgets", nil) }, function()
+		return result(
+			true,
+			`\{"data":\{"viewer":\{"pullRequests":\{"nodes":[{pullRequestJson(
+				7,
+				"idea",
+				',"repository":{"nameWithOwner":"Example/Widgets"}'
+			)}]}}}}`,
+			""
+		)
+	end)
+	assert.eq(#pullRequests, 1)
+	assert.eq(pullRequests[1].repository, "example/widgets")
+end)
+
 test.case("GitHub batches branch lookups into shared requests", function(assert)
 	local worktrees: { types.Worktree } = {}
 	for index = 1, 60 do
