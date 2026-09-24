@@ -2,8 +2,10 @@ local json = require("@std/json")
 local path = require("@std/path")
 local test = require("@std/test")
 
+local cache = require("@root/cache")
 local cli = require("@root/cli")
 local providers = require("@root/providers")
+local snapshot = require("@root/core/snapshot")
 local types = require("@root/types")
 
 local worktrees: { types.Worktree } = {
@@ -101,53 +103,148 @@ test.case("recent renders attention, repository, branch, PR, and worktree", func
 	assert.strContains(output, "/src/widgets-feature")
 end)
 
-test.case("go uses a numbered picker and opens with plain code folder", function(assert)
-	local commands: { { string } } = {}
-	local output: { string } = {}
-	local dependencies = baseDependencies(function(value)
-		table.insert(output, value)
-	end)
-	dependencies.input = function()
-		return "2"
-	end
-	dependencies.runner = function(argv)
-		table.insert(commands, argv)
-		return { ok = true, exitCode = 0, stdout = "", stderr = "" }
-	end
-	cli.execute({ "go" }, dependencies)
-	assert.strContains(output[1], "1.")
-	assert.eq(commands[1][1], "code")
-	assert.eq(commands[1][2], "/src/widgets")
-	assert.eq(#commands[1], 2)
+local function memoryCache(initial: snapshot.Snapshot?): (cache.Cache, { snapshot.Snapshot })
+	local writes: { snapshot.Snapshot } = {}
+	local current = initial
+	return {
+		read = function()
+			return current
+		end,
+		write = function(value)
+			current = value
+			table.insert(writes, value)
+		end,
+	},
+		writes
+end
+
+local pullRequestList = '[{"number":42,"title":"Add the hop command","headRefName":"feature/hop","url":"https://github.com/example/widgets/pull/42","state":"OPEN","isDraft":false},'
+	.. '{"number":43,"title":"Orphaned idea","headRefName":"elsewhere","url":"https://github.com/example/widgets/pull/43","state":"OPEN","isDraft":true}]'
+
+local function toDependencies(
+	commands: { { string } },
+	output: { string },
+	initial: snapshot.Snapshot?
+): (cli.Dependencies, { snapshot.Snapshot })
+	local memory, writes = memoryCache(initial)
+	return {
+		write = function(value)
+			table.insert(output, value)
+		end,
+		input = function()
+			return "2"
+		end,
+		runner = function(argv)
+			table.insert(commands, argv)
+			if argv[1] == "gh" then
+				return { ok = true, exitCode = 0, stdout = pullRequestList, stderr = "" }
+			end
+			return { ok = true, exitCode = 0, stdout = "", stderr = "" }
+		end,
+		homeDirectory = "/home/me",
+		loadWorktrees = function()
+			return worktrees
+		end,
+		cache = memory,
+		now = function()
+			return 1000
+		end,
+	},
+		writes
+end
+
+local function lastCommand(commands: { { string } }): { string }
+	return commands[#commands]
+end
+
+test.case("route defaults to help with no arguments and to `to` for expressions", function(assert)
+	assert.eq((cli.route({})), "help")
+	assert.eq((cli.route({ "--help" })), "help")
+	local command, trailing = cli.route({ "example/widgets#42" })
+	assert.eq(command, "to")
+	assert.eq(trailing[1], "example/widgets#42")
+	local listCommand, listArgs = cli.route({ "list", "--json" })
+	assert.eq(listCommand, "list")
+	assert.eq(listArgs[1], "--json")
 end)
 
-test.case("pr resolves with gh and opens the existing head worktree", function(assert)
-	local commands: { { string } } = {}
-	local dependencies = baseDependencies(function() end)
-	dependencies.runner = function(argv)
-		table.insert(commands, argv)
-		if argv[1] == "gh" and argv[2] == "search" then
-			return {
-				ok = true,
-				exitCode = 0,
-				stdout = '[{"number":42,"url":"https://github.com/example/widgets/pull/42","repository":{"nameWithOwner":"example/widgets"}}]',
-				stderr = "",
-			}
-		elseif argv[1] == "gh" then
-			return {
-				ok = true,
-				exitCode = 0,
-				stdout = '{"number":42,"url":"https://github.com/example/widgets/pull/42","headRefName":"feature/hop","headRepository":{"nameWithOwner":"example/widgets"}}',
-				stderr = "",
-			}
-		end
-		return { ok = true, exitCode = 0, stdout = "", stderr = "" }
+test.case("bare expressions open the matching PR worktree", function(assert)
+	for _, expression in { "example/widgets#42", "widgets#42", "#42", "https://github.com/example/widgets/pull/42" } do
+		local commands: { { string } } = {}
+		cli.execute({ expression }, (toDependencies(commands, {})))
+		assert.eq(lastCommand(commands)[1], "code")
+		assert.eq(lastCommand(commands)[2], "/src/widgets-feature")
 	end
-	cli.execute({ "pr", "42" }, dependencies)
-	assert.eq(commands[1][1], "gh")
-	assert.eq(commands[2][1], "gh")
-	assert.eq(commands[3][1], "code")
-	assert.eq(commands[3][2], "/src/widgets-feature")
+end)
+
+test.case("to matches PR titles and multi-word queries", function(assert)
+	local commands: { { string } } = {}
+	cli.execute({ "to", "hop", "command" }, (toDependencies(commands, {})))
+	assert.eq(lastCommand(commands)[2], "/src/widgets-feature")
+end)
+
+test.case("to picks from ambiguous matches with the numbered picker", function(assert)
+	local commands: { { string } } = {}
+	local output: { string } = {}
+	cli.execute({ "widgets" }, (toDependencies(commands, output)))
+	assert.strContains(output[1], "1. widgets · main · no PR")
+	assert.strContains(output[1], "2. widgets · feature/hop · #42 Add the hop command (open)")
+	assert.eq(lastCommand(commands)[2], "/src/widgets-feature")
+end)
+
+test.case("to refreshes a stale cache once before giving up", function(assert)
+	local commands: { { string } } = {}
+	local stale = snapshot.build({ worktrees[1] }, {}, 0)
+	local dependencies, writes = toDependencies(commands, {}, stale)
+	cli.execute({ "feature/hop" }, dependencies)
+	assert.eq(#writes, 1)
+	assert.eq(lastCommand(commands)[2], "/src/widgets-feature")
+end)
+
+test.case("to reports PRs that have no local worktree", function(assert)
+	local ok, message = pcall(cli.execute, { "#43" }, (toDependencies({}, {})))
+	assert.eq(ok, false)
+	assert.strContains(tostring(message), "no local worktree")
+	assert.strContains(tostring(message), "https://github.com/example/widgets/pull/43")
+end)
+
+test.case("list prints worktrees, PRs, and orphaned PRs for humans", function(assert)
+	local output: { string } = {}
+	cli.execute({ "list" }, (toDependencies({}, output)))
+	assert.strContains(output[1], "widgets · feature/hop · #42 Add the hop command (open)")
+	assert.strContains(output[1], "Open pull requests without a local worktree")
+	assert.strContains(output[1], "#43 Orphaned idea (draft)")
+end)
+
+test.case("list --json serves the cache and --refresh rebuilds it", function(assert)
+	local commands: { { string } } = {}
+	local output: { string } = {}
+	local cached = snapshot.build(worktrees, {}, 900)
+	local dependencies, writes = toDependencies(commands, output, cached)
+	cli.execute({ "list", "--json" }, dependencies)
+	assert.eq(#commands, 0)
+	local value = json.asObject(json.deserialize(output[1])) or error("expected JSON object")
+	assert.eq(value.generatedAt, 900)
+
+	cli.execute({ "list", "--json", "--refresh" }, dependencies)
+	assert.eq(#writes, 1)
+	local refreshed = json.asObject(json.deserialize(output[2])) or error("expected JSON object")
+	local items = json.asArray(refreshed.worktrees) or error("expected worktrees")
+	local feature = json.asObject(items[2]) or error("expected worktree")
+	local pr = json.asObject(feature.pr) or error("expected PR")
+	local repository = json.asObject(feature.repository) or error("expected repository")
+	assert.eq(pr.number, 42)
+	assert.eq(pr.title, "Add the hop command")
+	assert.eq(repository.name, "widgets")
+	assert.eq(repository.remote, "example/widgets")
+end)
+
+test.case("list --no-pr skips gh and leaves the cache alone", function(assert)
+	local commands: { { string } } = {}
+	local dependencies, writes = toDependencies(commands, {})
+	cli.execute({ "list", "--refresh", "--no-pr" }, dependencies)
+	assert.eq(#commands, 0)
+	assert.eq(#writes, 0)
 end)
 
 test.case("cursor resumes the selected session in its workspace", function(assert)
@@ -172,7 +269,7 @@ test.case("help describes every public command", function(assert)
 			output = value
 		end,
 	})
-	for _, command in { "recent", "go", "pr", "cursor", "help" } do
+	for _, command in { "hop <expr>", "to", "list", "recent", "cursor", "help" } do
 		assert.strContains(output, command)
 	end
 end)

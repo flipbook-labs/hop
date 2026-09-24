@@ -6,6 +6,7 @@ local process = require("@std/process")
 
 local Claude = require("@root/providers/claude")
 local Cursor = require("@root/providers/cursor")
+local cache = require("@root/cache")
 local defaultRun = require("@root/command")
 local editor = require("@root/editor")
 local git = require("@root/git")
@@ -14,6 +15,8 @@ local loadConfig = require("@root/config/load")
 local matchWorktrees = require("@root/core/matchWorktrees")
 local providers = require("@root/providers")
 local render = require("@root/render")
+local resolve = require("@root/core/resolve")
+local snapshot = require("@root/core/snapshot")
 local types = require("@root/types")
 
 type RecentItem = render.RecentItem
@@ -25,6 +28,19 @@ export type Dependencies = {
 	homeDirectory: path.Pathlike?,
 	loadSessions: (() -> { types.Session })?,
 	loadWorktrees: (() -> { types.Worktree })?,
+	cache: cache.Cache?,
+	now: (() -> number)?,
+}
+
+type Resolved = {
+	runner: types.CommandRunner,
+	input: () -> string?,
+	write: (string) -> (),
+	homeDirectory: string,
+	loadWorktrees: () -> { types.Worktree },
+	loadSessions: () -> { types.Session },
+	cache: cache.Cache,
+	now: () -> number,
 }
 
 type RecentOptions = {
@@ -34,10 +50,16 @@ type RecentOptions = {
 	json: boolean,
 }
 
+type ListOptions = {
+	refresh: boolean,
+	pullRequests: boolean,
+	json: boolean,
+}
+
 local COMMANDS: { [string]: boolean } = {
+	to = true,
+	list = true,
 	recent = true,
-	go = true,
-	pr = true,
 	cursor = true,
 	help = true,
 }
@@ -46,24 +68,27 @@ local HELP = [[
 hop — jump from agent sessions and pull requests to local worktrees
 
 USAGE:
+  hop <expr>                  Same as `hop to <expr>`
+  hop to <expr>               Open the worktree matching <expr> in VS Code
+  hop list [--refresh] [--no-pr] [--json]
   hop recent [--limit N] [--repo OWNER/REPO] [--agent cursor|claude] [--json]
-  hop go [NUMBER|QUERY]
-  hop pr <URL|NUMBER>
   hop cursor [NUMBER|QUERY]
   hop help
+
+EXPRESSIONS:
+  owner/repo#123, repo#123, #123, 123, or a PR URL
+  otherwise a branch, repository, folder name, or PR title fragment
 ]]
 
-local function findCommand(args: { string }): (string, { string })
-	for index, value in args do
-		if COMMANDS[value] then
-			local trailing: { string } = {}
-			for trailingIndex = index + 1, #args do
-				table.insert(trailing, args[trailingIndex])
-			end
-			return value, trailing
-		end
+local function route(args: { string }): (string, { string })
+	local first = args[1]
+	if first == nil or first == "help" or first == "--help" or first == "-h" then
+		return "help", {}
 	end
-	return "help", {}
+	if COMMANDS[first] then
+		return first, { table.unpack(args, 2) }
+	end
+	return "to", args
 end
 
 local function recentOptions(args: { string }): RecentOptions
@@ -86,28 +111,69 @@ local function recentOptions(args: { string }): RecentOptions
 	}
 end
 
-local function dependencies(options: Dependencies?): (types.CommandRunner, () -> string?, (string) -> (), () -> { types.Worktree }, (
-) -> { types.Session })
+local function listOptions(args: { string }): ListOptions
+	local parser = batteriesCli.parser()
+	parser:add("refresh", "flag", {})
+	parser:add("no-pr", "flag", {})
+	parser:add("json", "flag", {})
+	parser:parse(args)
+	return {
+		refresh = parser:has("refresh"),
+		pullRequests = not parser:has("no-pr"),
+		json = parser:has("json"),
+	}
+end
+
+local function dependencies(options: Dependencies?): Resolved
 	local resolved: Dependencies = options or {}
 	local runner = resolved.runner or defaultRun
-	local input = resolved.input or function()
-		return io.input()
-	end
-	local write = resolved.write or print
-	local home = resolved.homeDirectory or process.homedir()
-	local loadWorktrees = resolved.loadWorktrees
-		or function()
+	local home = tostring(resolved.homeDirectory or process.homedir())
+	return {
+		runner = runner,
+		input = resolved.input or function()
+			return io.input()
+		end,
+		write = resolved.write or print,
+		homeDirectory = home,
+		loadWorktrees = resolved.loadWorktrees or function()
 			local config = loadConfig({ homeDirectory = home })
 			return git.discover(config.roots, { runner = runner })
-		end
-	local loadSessions = resolved.loadSessions
-		or function()
+		end,
+		loadSessions = resolved.loadSessions or function()
 			return providers.collect({
 				Cursor.new({ homeDirectory = home, runner = runner }),
 				Claude.new({ homeDirectory = home }),
 			})
+		end,
+		cache = resolved.cache or cache.new(home),
+		now = resolved.now or function()
+			return os.time()
+		end,
+	}
+end
+
+-- Returns the cached snapshot when allowed, otherwise rebuilds it from Git and GitHub.
+-- Local-only rebuilds are not cached so they never discard known PR associations.
+local function loadSnapshot(
+	deps: Resolved,
+	refresh: boolean,
+	includePullRequests: boolean
+): (snapshot.Snapshot, boolean)
+	if not refresh then
+		local cached = deps.cache.read()
+		if cached then
+			return cached, true
 		end
-	return runner, input, write, loadWorktrees, loadSessions
+	end
+	local worktrees = deps.loadWorktrees()
+	local pullRequests = if includePullRequests
+		then github.listPullRequests(snapshot.repositories(worktrees), deps.runner)
+		else {}
+	local value = snapshot.build(worktrees, pullRequests, deps.now())
+	if includePullRequests then
+		deps.cache.write(value)
+	end
+	return value, false
 end
 
 local function worktreeForSession(session: types.Session, worktrees: { types.Worktree }): types.Worktree?
@@ -173,16 +239,13 @@ local function filteredRecent(items: { RecentItem }, options: RecentOptions): { 
 end
 
 local function attachPullRequests(items: { RecentItem }, runner: types.CommandRunner)
-	local repositories: { string } = {}
-	local seen: { [string]: boolean } = {}
+	local worktrees: { types.Worktree } = {}
 	for _, item in items do
-		local repository = if item.worktree then item.worktree.repository else nil
-		if repository and not seen[repository] then
-			seen[repository] = true
-			table.insert(repositories, repository)
+		if item.worktree then
+			table.insert(worktrees, item.worktree)
 		end
 	end
-	local pullRequests = github.listOpenPullRequests(repositories, runner)
+	local pullRequests = github.indexPullRequests(github.listPullRequests(snapshot.repositories(worktrees), runner))
 	for _, item in items do
 		local worktree = item.worktree
 		if worktree and worktree.repository and worktree.branch then
@@ -207,27 +270,6 @@ local function itemJson(item: RecentItem): json.Object
 		needsAttention = session.needsAttention,
 		filesChanged = session.filesChanged,
 	}
-end
-
-local function chooseWorktree(
-	worktrees: { types.Worktree },
-	input: () -> string?,
-	write: (string) -> ()
-): types.Worktree?
-	if #worktrees == 0 then
-		return nil
-	elseif #worktrees == 1 then
-		return worktrees[1]
-	end
-	for index, worktree in worktrees do
-		write(`{index}. {worktree.path} · {worktree.branch or "detached"}`)
-	end
-	write("Choose a number:")
-	local selected = tonumber(input())
-	if selected == nil or selected % 1 ~= 0 or worktrees[selected] == nil then
-		error("selection must be one of the listed numbers")
-	end
-	return worktrees[selected]
 end
 
 local function itemWorktree(item: RecentItem): types.Worktree?
@@ -271,76 +313,119 @@ local function selectItem(
 	return render.choose(matches, input, write)
 end
 
-local function execute(args: { string }, options: Dependencies?)
-	local command, trailing = findCommand(args)
-	local runner, input, write, loadWorktrees, loadSessions = dependencies(options)
+local function age(seconds: number): string
+	if seconds < 60 then
+		return "just now"
+	elseif seconds < 3600 then
+		return `{seconds // 60}m ago`
+	elseif seconds < 86400 then
+		return `{seconds // 3600}h ago`
+	end
+	return `{seconds // 86400}d ago`
+end
 
-	if command == "help" then
-		write(HELP)
+local function list(deps: Resolved, options: ListOptions)
+	local value, cached = loadSnapshot(deps, options.refresh, options.pullRequests)
+	if options.json then
+		deps.write(json.serialize(snapshot.toJson(value), true))
 		return
 	end
+	local sections: { string } = {}
+	if #value.entries > 0 then
+		table.insert(
+			sections,
+			render.numberedWith(value.entries, function(entry)
+				return render.entryLabel(entry, deps.homeDirectory)
+			end)
+		)
+	else
+		table.insert(sections, "No worktrees found.")
+	end
+	if #value.pullRequests > 0 then
+		table.insert(
+			sections,
+			"Open pull requests without a local worktree:\n"
+				.. render.numberedWith(value.pullRequests, render.pullRequestLabel)
+		)
+	end
+	if cached then
+		table.insert(sections, `Cached {age(deps.now() - value.generatedAt)}; run \`hop list --refresh\` to update.`)
+	end
+	deps.write(table.concat(sections, "\n\n"))
+end
 
-	local worktrees = loadWorktrees()
-	if command == "recent" then
+local function noWorktreeMessage(expression: string, pullRequests: { types.PullRequest }): string
+	if #pullRequests == 0 then
+		return `nothing matches "{expression}"`
+	end
+	local lines = { `no local worktree for "{expression}"; matching pull requests:` }
+	for _, pullRequest in pullRequests do
+		table.insert(lines, `  {pullRequest.repository}#{pullRequest.number} {pullRequest.url}`)
+	end
+	return table.concat(lines, "\n")
+end
+
+local function to(deps: Resolved, args: { string })
+	local text = table.concat(args, " ")
+	assert(text:match("%S"), "usage: hop to <expr>")
+	local expression = resolve.parse(text)
+	local value, cached = loadSnapshot(deps, false, true)
+	local resolution = resolve.resolve(value, expression)
+	if #resolution.entries == 0 and cached then
+		-- The worktree may be newer than the cache, such as one an agent just created.
+		value = loadSnapshot(deps, true, true)
+		resolution = resolve.resolve(value, expression)
+	end
+	if #resolution.entries == 0 then
+		error(noWorktreeMessage(text, resolution.pullRequests), 0)
+	end
+	local selected = render.chooseWith(resolution.entries, function(entry)
+		return render.entryLabel(entry, deps.homeDirectory)
+	end, deps.input, deps.write)
+	assert(selected, "no worktree selected")
+	editor.open(tostring(selected.worktree.path), deps.runner)
+end
+
+local function execute(args: { string }, options: Dependencies?)
+	local command, trailing = route(args)
+	local deps = dependencies(options)
+
+	if command == "help" then
+		deps.write(HELP)
+	elseif command == "to" then
+		to(deps, trailing)
+	elseif command == "list" then
+		list(deps, listOptions(trailing))
+	elseif command == "recent" then
 		local selectedOptions = recentOptions(trailing)
-		local items = filteredRecent(recentItems(loadSessions(), worktrees), selectedOptions)
-		attachPullRequests(items, runner)
+		local items = filteredRecent(recentItems(deps.loadSessions(), deps.loadWorktrees()), selectedOptions)
+		attachPullRequests(items, deps.runner)
 		if selectedOptions.json then
 			local values: { json.Value } = {}
 			for _, item in items do
 				table.insert(values, itemJson(item))
 			end
-			write(json.serialize(values, true))
+			deps.write(json.serialize(values, true))
 		else
-			write(render.numbered(items))
+			deps.write(render.numbered(items))
 		end
-	elseif command == "go" then
-		local query = trailing[1]
-		local items = recentItems(loadSessions(), worktrees)
-		local selectedItem = selectItem(items, query, input, write)
-		local target = if selectedItem then itemWorktree(selectedItem) else nil
-		if target == nil and query then
-			target = chooseWorktree(matchWorktrees(worktrees, query), input, write)
-		end
-		assert(target, "no matching worktree found")
-		editor.open(tostring(target.path), runner)
-	elseif command == "pr" then
-		local value = assert(trailing[1], "PR number or URL is required")
-		local repositories: { string } = {}
-		local seenRepositories: { [string]: boolean } = {}
-		for _, worktree in worktrees do
-			if worktree.repository and not seenRepositories[worktree.repository] then
-				seenRepositories[worktree.repository] = true
-				table.insert(repositories, worktree.repository)
-			end
-		end
-		local pullRequest = github.resolvePullRequest(value, runner, repositories)
-		local branchMatches = matchWorktrees(worktrees, pullRequest.branch)
-		local repositoryMatches: { types.Worktree } = {}
-		for _, worktree in branchMatches do
-			if worktree.repository == pullRequest.repository then
-				table.insert(repositoryMatches, worktree)
-			end
-		end
-		local target = chooseWorktree(repositoryMatches, input, write)
-		assert(target, `no worktree exists for {pullRequest.repository}:{pullRequest.branch}`)
-		editor.open(tostring(target.path), runner)
 	elseif command == "cursor" then
 		local cursorItems: { RecentItem } = {}
-		for _, item in recentItems(loadSessions(), worktrees) do
+		for _, item in recentItems(deps.loadSessions(), deps.loadWorktrees()) do
 			if item.session.agent == "cursor" then
 				table.insert(cursorItems, item)
 			end
 		end
-		local selected = selectItem(cursorItems, trailing[1], input, write)
+		local selected = selectItem(cursorItems, trailing[1], deps.input, deps.write)
 		assert(selected, "no matching Cursor session found")
 		local target = assert(itemWorktree(selected), "Cursor session has no workspace")
-		editor.resume(tostring(target.path), selected.session.id, runner)
+		editor.resume(tostring(target.path), selected.session.id, deps.runner)
 	end
 end
 
-local function run(args: { string })
-	local ok, message = pcall(execute, args, nil)
+-- Lute passes the program path as the first argument.
+local function run(argv: { string })
+	local ok, message = pcall(execute, { table.unpack(argv, 2) }, nil)
 	if not ok then
 		print(`Error: {message}`)
 		process.exit(1)
@@ -349,7 +434,8 @@ end
 
 return table.freeze({
 	execute = execute,
-	findCommand = findCommand,
+	listOptions = listOptions,
 	recentOptions = recentOptions,
+	route = route,
 	run = run,
 })
