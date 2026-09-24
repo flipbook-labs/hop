@@ -17,19 +17,6 @@ export type Snapshot = {
 	pullRequests: { types.PullRequest },
 }
 
-local function repositories(worktrees: { types.Worktree }): { string }
-	local result: { string } = {}
-	local seen: { [string]: boolean } = {}
-	for _, worktree in worktrees do
-		local repository = worktree.repository
-		if repository and not seen[repository] then
-			seen[repository] = true
-			table.insert(result, repository)
-		end
-	end
-	return result
-end
-
 local function build(worktrees: { types.Worktree }, pullRequests: { types.PullRequest }, generatedAt: number): Snapshot
 	local index = github.indexPullRequests(pullRequests)
 	local used: { [string]: boolean } = {}
@@ -189,7 +176,6 @@ end
 return table.freeze({
 	build = build,
 	fromJson = fromJson,
-	repositories = repositories,
 	repositoryName = repositoryName,
 	toJson = toJson,
 })

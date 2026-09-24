@@ -166,9 +166,7 @@ local function loadSnapshot(
 		end
 	end
 	local worktrees = deps.loadWorktrees()
-	local pullRequests = if includePullRequests
-		then github.listPullRequests(snapshot.repositories(worktrees), deps.runner)
-		else {}
+	local pullRequests = if includePullRequests then github.listPullRequests(worktrees, deps.runner) else {}
 	local value = snapshot.build(worktrees, pullRequests, deps.now())
 	if includePullRequests then
 		deps.cache.write(value)
@@ -245,7 +243,7 @@ local function attachPullRequests(items: { RecentItem }, runner: types.CommandRu
 			table.insert(worktrees, item.worktree)
 		end
 	end
-	local pullRequests = github.indexPullRequests(github.listPullRequests(snapshot.repositories(worktrees), runner))
+	local pullRequests = github.indexPullRequests(github.listPullRequests(worktrees, runner))
 	for _, item in items do
 		local worktree = item.worktree
 		if worktree and worktree.repository and worktree.branch then
