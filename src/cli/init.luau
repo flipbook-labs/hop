@@ -30,6 +30,7 @@ export type Dependencies = {
 	loadWorktrees: (() -> { types.Worktree })?,
 	cache: cache.Cache?,
 	now: (() -> number)?,
+	activity: resolve.Activity?,
 }
 
 type Resolved = {
@@ -41,6 +42,7 @@ type Resolved = {
 	loadSessions: () -> { types.Session },
 	cache: cache.Cache,
 	now: () -> number,
+	activity: resolve.Activity,
 }
 
 type RecentOptions = {
@@ -61,7 +63,9 @@ local SUMMARY = "hop — jump from agent sessions and pull requests to local wor
 local EXPRESSIONS = [[
 Expressions:
   owner/repo#123, repo#123, #123, 123, or a PR URL
-  otherwise a branch, repository, folder name, or PR title fragment]]
+  otherwise words that each match a branch, repository, folder name, or PR title
+  `default` matches a repository's default branch, as in `hop flipbook default`
+  A repository's default-branch checkout is listed first, then the most recently used]]
 
 local COMMAND_HELP: { [string]: string } = {
 	to = "Open the worktree matching <expr> in VS Code",
@@ -184,6 +188,7 @@ local function dependencies(options: Dependencies?): Resolved
 		now = resolved.now or function()
 			return os.time()
 		end,
+		activity = resolved.activity or git.lastActivity,
 	}
 end
 
@@ -405,11 +410,11 @@ local function to(deps: Resolved, args: { string })
 	assert(text:match("%S"), "usage: hop to <expr>")
 	local expression = resolve.parse(text)
 	local value, cached = loadSnapshot(deps, false, true)
-	local resolution = resolve.resolve(value, expression)
+	local resolution = resolve.resolve(value, expression, deps.activity)
 	if #resolution.entries == 0 and cached then
 		-- The worktree may be newer than the cache, such as one an agent just created.
 		value = loadSnapshot(deps, true, true)
-		resolution = resolve.resolve(value, expression)
+		resolution = resolve.resolve(value, expression, deps.activity)
 	end
 	if #resolution.entries == 0 then
 		error(noWorktreeMessage(text, resolution.pullRequests), 0)

@@ -46,7 +46,12 @@ local function commandOutput(runner: types.CommandRunner, argv: { string }): str
 	return trim(result.stdout)
 end
 
-local function parseWorktreeList(contents: string, repository: string?, primaryPath: string): { types.Worktree }
+local function parseWorktreeList(
+	contents: string,
+	repository: string?,
+	primaryPath: string,
+	defaultBranch: string?
+): { types.Worktree }
 	local result: { types.Worktree } = {}
 	local current: types.Worktree? = nil
 	for line in (contents .. "\n"):gmatch("(.-)\r?\n") do
@@ -61,6 +66,7 @@ local function parseWorktreeList(contents: string, repository: string?, primaryP
 				repository = repository,
 				root = primaryPath,
 				head = nil,
+				defaultBranch = defaultBranch,
 				primary = worktreePath == primaryPath,
 			}
 			current = created
@@ -136,9 +142,14 @@ local function discover(roots: { path.Path }, options: Options?): { types.Worktr
 		local primaryString = tostring(primary)
 		local remote = commandOutput(runner, { "git", "-C", primaryString, "remote", "get-url", "origin" })
 		local repository = if remote then repositoryFromRemote(remote) else nil
+		local originHead = commandOutput(
+			runner,
+			{ "git", "-C", primaryString, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD" }
+		)
+		local defaultBranch = if originHead then originHead:match("^[^/]+/(.+)$") else nil
 		local porcelain = commandOutput(runner, { "git", "-C", primaryString, "worktree", "list", "--porcelain" })
 		if porcelain then
-			for _, worktree in parseWorktreeList(porcelain, repository, primaryString) do
+			for _, worktree in parseWorktreeList(porcelain, repository, primaryString, defaultBranch) do
 				local key = tostring(worktree.path)
 				if not seen[key] then
 					seen[key] = true
@@ -153,8 +164,38 @@ local function discover(roots: { path.Path }, options: Options?): { types.Worktr
 	return result
 end
 
+local function gitDirectory(worktree: types.Worktree): path.Path?
+	local dotGit = path.join(worktree.path, ".git")
+	local okType, kind = pcall(fs.type, dotGit)
+	if not okType then
+		return nil
+	elseif kind == "dir" then
+		return dotGit
+	elseif kind ~= "file" then
+		return nil
+	end
+	local okRead, contents = pcall(fs.readFileToString, dotGit)
+	local target = if okRead then contents:match("^gitdir:%s*(.-)%s*$") else nil
+	if target == nil or target == "" then
+		return nil
+	end
+	return if path.isAbsolute(target) then path.parse(target) else path.join(worktree.path, target)
+end
+
+-- Seconds since the epoch that the worktree's index last changed, or 0 when unknown.
+-- Git rewrites the index on checkout, commit, and status refreshes, so it tracks recent use.
+local function lastActivity(worktree: types.Worktree): number
+	local directory = gitDirectory(worktree)
+	if directory == nil then
+		return 0
+	end
+	local ok, metadata = pcall(fs.metadata, path.join(directory, "index"))
+	return if ok then metadata.modified:toSeconds() else 0
+end
+
 return table.freeze({
 	discover = discover,
+	lastActivity = lastActivity,
 	parseWorktreeList = parseWorktreeList,
 	repositoryFromRemote = repositoryFromRemote,
 })

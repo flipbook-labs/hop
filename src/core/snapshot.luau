@@ -67,6 +67,17 @@ local function repositoryName(worktree: types.Worktree): string
 	return root:gsub("/+$", ""):match("([^/]+)$") or root
 end
 
+-- Repositories without an `origin/HEAD` fall back to the conventional default branch names.
+local function isDefaultBranch(worktree: types.Worktree): boolean
+	local branch = worktree.branch
+	if branch == nil then
+		return false
+	elseif worktree.defaultBranch then
+		return branch == worktree.defaultBranch
+	end
+	return branch == "main" or branch == "master"
+end
+
 local function pullRequestJson(pullRequest: types.PullRequest): json.Object
 	return {
 		repository = pullRequest.repository,
@@ -87,6 +98,7 @@ local function toJson(snapshot: Snapshot): json.Object
 			name = repositoryName(worktree),
 			root = worktree.root,
 			remote = worktree.repository,
+			defaultBranch = worktree.defaultBranch,
 		}
 		local item: json.Object = {
 			repository = repository,
@@ -170,6 +182,7 @@ local function fromJson(value: json.Value): Snapshot?
 				repository = optionalString(repository.remote),
 				root = optionalString(repository.root),
 				head = optionalString(worktreeObject.head),
+				defaultBranch = optionalString(repository.defaultBranch),
 				primary = worktreeObject.primary == true,
 			},
 			pullRequest = pullRequestFromJson(worktreeObject.pr),
@@ -189,6 +202,7 @@ end
 return table.freeze({
 	build = build,
 	fromJson = fromJson,
+	isDefaultBranch = isDefaultBranch,
 	repositories = repositories,
 	repositoryName = repositoryName,
 	toJson = toJson,

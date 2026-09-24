@@ -225,6 +225,26 @@ test.case("to picks from ambiguous matches with the numbered picker", function(a
 	assert.eq(lastCommand(commands)[2], "/src/widgets-feature")
 end)
 
+test.case("to opens a repository's default-branch checkout by keyword", function(assert)
+	local commands: { { string } } = {}
+	cli.execute({ "widgets", "default" }, (toDependencies(commands, {})))
+	assert.eq(lastCommand(commands)[2], "/src/widgets")
+end)
+
+test.case("to lists the most recently used matches first", function(assert)
+	for _, recent in { "/src/widgets", "/src/widgets-feature" } do
+		local commands: { { string } } = {}
+		local output: { string } = {}
+		local dependencies = toDependencies(commands, output)
+		dependencies.activity = function(worktree)
+			return if tostring(worktree.path) == recent then 20 else 10
+		end
+		cli.execute({ "example" }, dependencies)
+		assert.strContains(output[1], `1. widgets · {if recent == "/src/widgets" then "main" else "feature/hop"}`)
+		assert.eq(lastCommand(commands)[2], if recent == "/src/widgets" then "/src/widgets-feature" else "/src/widgets")
+	end
+end)
+
 test.case("to refreshes a stale cache once before giving up", function(assert)
 	local commands: { { string } } = {}
 	local stale = snapshot.build({ worktrees[1] }, {}, 0)

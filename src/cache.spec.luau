@@ -27,6 +27,7 @@ test.case("cache round-trips a snapshot", function(assert)
 			repository = "example/widgets",
 			root = "/src/widgets",
 			head = "abc123",
+			defaultBranch = "main",
 			primary = false,
 		},
 	}, {
@@ -47,6 +48,7 @@ test.case("cache round-trips a snapshot", function(assert)
 	assert.eq(tostring(entry.worktree.path), "/src/widgets-feature")
 	assert.eq(entry.worktree.head, "abc123")
 	assert.eq(entry.worktree.root, "/src/widgets")
+	assert.eq(entry.worktree.defaultBranch, "main")
 	local pullRequest = entry.pullRequest or error("expected PR")
 	assert.eq(pullRequest.title, "Add hop")
 	assert.eq(pullRequest.draft, false)

@@ -1,4 +1,3 @@
-local matchWorktrees = require("@root/core/matchWorktrees")
 local snapshot = require("@root/core/snapshot")
 local types = require("@root/types")
 
@@ -78,50 +77,130 @@ local function resolvePullRequest(value: snapshot.Snapshot, expression: Expressi
 	return { entries = entries, pullRequests = pullRequests }
 end
 
-local function titleMatches(pullRequest: types.PullRequest?, text: string): boolean
-	return pullRequest ~= nil and pullRequest.title ~= nil and pullRequest.title:lower():find(text, 1, true) ~= nil
+-- Seconds since the epoch that a worktree was last used; higher sorts first.
+export type Activity = (types.Worktree) -> number
+
+-- A query word that matches worktrees on their repository's default branch.
+local DEFAULT_KEYWORD = "default"
+
+local function words(text: string): { string }
+	local result: { string } = {}
+	for word in text:lower():gmatch("%S+") do
+		table.insert(result, word)
+	end
+	return result
 end
 
-local function resolveQuery(value: snapshot.Snapshot, text: string): Resolution
-	local byPath: { [string]: snapshot.Entry } = {}
-	local worktrees: { types.Worktree } = {}
-	for _, entry in value.entries do
-		byPath[tostring(entry.worktree.path)] = entry
-		table.insert(worktrees, entry.worktree)
+local function titleMatches(pullRequest: types.PullRequest?, word: string): boolean
+	return pullRequest ~= nil and pullRequest.title ~= nil and pullRequest.title:lower():find(word, 1, true) ~= nil
+end
+
+local function entryMatches(entry: snapshot.Entry, word: string): boolean
+	local worktree = entry.worktree
+	if word == DEFAULT_KEYWORD and snapshot.isDefaultBranch(worktree) then
+		return true
 	end
+	local fields = {
+		worktree.branch or "",
+		tostring(worktree.path):match("([^/]+)/*$") or "",
+		worktree.repository or "",
+		snapshot.repositoryName(worktree),
+	}
+	for _, field in fields do
+		if field:lower():find(word, 1, true) then
+			return true
+		end
+	end
+	return titleMatches(entry.pullRequest, word)
+end
+
+-- A query naming a repository puts that repository's default-branch checkout first.
+local function namesDefaultCheckout(entry: snapshot.Entry, queryWords: { string }): boolean
+	local worktree = entry.worktree
+	if not snapshot.isDefaultBranch(worktree) then
+		return false
+	end
+	local name = snapshot.repositoryName(worktree):lower()
+	local repository = if worktree.repository then worktree.repository:lower() else nil
+	for _, word in queryWords do
+		if word == name or word == repository then
+			return true
+		end
+	end
+	return false
+end
+
+local function sortEntries(entries: { snapshot.Entry }, queryWords: { string }, activity: Activity)
+	local pinned: { [snapshot.Entry]: boolean } = {}
+	local lastUsed: { [snapshot.Entry]: number } = {}
+	for _, entry in entries do
+		pinned[entry] = namesDefaultCheckout(entry, queryWords)
+		lastUsed[entry] = activity(entry.worktree)
+	end
+	table.sort(entries, function(left: snapshot.Entry, right: snapshot.Entry)
+		if pinned[left] ~= pinned[right] then
+			return pinned[left]
+		elseif lastUsed[left] ~= lastUsed[right] then
+			return lastUsed[left] > lastUsed[right]
+		end
+		return tostring(left.worktree.path) < tostring(right.worktree.path)
+	end)
+end
+
+-- Every word must match an entry's branch, folder, repository, or PR title. A query that is
+-- exactly a branch name only returns worktrees on that branch.
+local function resolveQuery(value: snapshot.Snapshot, text: string, activity: Activity): Resolution
+	local queryWords = words(text)
+	local normalized = table.concat(queryWords, " ")
 
 	local entries: { snapshot.Entry } = {}
-	local included: { [snapshot.Entry]: boolean } = {}
-	for _, worktree in matchWorktrees(worktrees, text) do
-		local entry = byPath[tostring(worktree.path)]
-		if entry and not included[entry] then
-			included[entry] = true
-			table.insert(entries, entry)
-		end
-	end
-
-	local normalized = text:lower()
 	for _, entry in value.entries do
-		if not included[entry] and titleMatches(entry.pullRequest, normalized) then
-			included[entry] = true
+		local branch = entry.worktree.branch
+		if branch and branch:lower() == normalized then
 			table.insert(entries, entry)
 		end
 	end
+	if #entries == 0 then
+		for _, entry in value.entries do
+			local matched = true
+			for _, word in queryWords do
+				if not entryMatches(entry, word) then
+					matched = false
+					break
+				end
+			end
+			if matched then
+				table.insert(entries, entry)
+			end
+		end
+	end
+	sortEntries(entries, queryWords, activity)
 
 	local pullRequests: { types.PullRequest } = {}
 	for _, pullRequest in value.pullRequests do
-		if titleMatches(pullRequest, normalized) then
+		local matched = true
+		for _, word in queryWords do
+			if not titleMatches(pullRequest, word) then
+				matched = false
+				break
+			end
+		end
+		if matched then
 			table.insert(pullRequests, pullRequest)
 		end
 	end
 	return { entries = entries, pullRequests = pullRequests }
 end
 
-local function resolve(value: snapshot.Snapshot, expression: Expression): Resolution
+local function noActivity(_worktree: types.Worktree): number
+	return 0
+end
+
+local function resolve(value: snapshot.Snapshot, expression: Expression, activity: Activity?): Resolution
 	if expression.kind == "pullRequest" then
 		return resolvePullRequest(value, expression)
 	end
-	return resolveQuery(value, expression.text)
+	return resolveQuery(value, expression.text, activity or noActivity)
 end
 
 return table.freeze({
