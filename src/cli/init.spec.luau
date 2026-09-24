@@ -292,6 +292,23 @@ test.case("list --json serves the cache and --refresh rebuilds it", function(ass
 	assert.eq(repository.remote, "example/widgets")
 end)
 
+test.case("list --json reports the default branch and live activity", function(assert)
+	local output: { string } = {}
+	local dependencies = toDependencies({}, output)
+	dependencies.activity = function(worktree)
+		return if tostring(worktree.path) == "/src/widgets" then 50 else 10
+	end
+	cli.execute({ "list", "--json" }, dependencies)
+	local value = json.asObject(json.deserialize(output[1])) or error("expected JSON object")
+	local items = json.asArray(value.worktrees) or error("expected worktrees")
+	local primary = json.asObject(items[1]) or error("expected worktree")
+	local feature = json.asObject(items[2]) or error("expected worktree")
+	assert.eq(primary.onDefaultBranch, true)
+	assert.eq(primary.lastActivity, 50)
+	assert.eq(feature.onDefaultBranch, false)
+	assert.eq(feature.lastActivity, 10)
+end)
+
 test.case("list --no-pr skips gh and leaves the cache alone", function(assert)
 	local commands: { { string } } = {}
 	local dependencies, writes = toDependencies(commands, {})

@@ -90,7 +90,8 @@ local function pullRequestJson(pullRequest: types.PullRequest): json.Object
 	}
 end
 
-local function toJson(snapshot: Snapshot): json.Object
+-- `activity` adds each worktree's last use, which changes too often to cache.
+local function toJson(snapshot: Snapshot, activity: ((types.Worktree) -> number)?): json.Object
 	local worktrees: json.Array = {}
 	for _, entry in snapshot.entries do
 		local worktree = entry.worktree
@@ -106,6 +107,8 @@ local function toJson(snapshot: Snapshot): json.Object
 			branch = worktree.branch,
 			head = worktree.head,
 			primary = worktree.primary,
+			onDefaultBranch = isDefaultBranch(worktree),
+			lastActivity = if activity then activity(worktree) else nil,
 			pr = if entry.pullRequest then pullRequestJson(entry.pullRequest) else nil,
 		}
 		table.insert(worktrees, item)

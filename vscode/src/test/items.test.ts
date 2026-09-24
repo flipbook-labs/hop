@@ -79,6 +79,98 @@ test("recent worktrees come first and the current worktree goes last", () => {
 	assert.equal(items[2].description, "flipbook · current");
 });
 
+const searchList: HopList = {
+	generatedAt: 0,
+	worktrees: [
+		{
+			repository: { name: "uiblox", remote: "org/uiblox" },
+			path: "/src/uiblox",
+			branch: "master",
+			primary: true,
+			onDefaultBranch: true,
+			lastActivity: 10,
+		},
+		{
+			repository: { name: "uiblox", remote: "org/uiblox" },
+			path: "/src/uiblox-migration",
+			branch: "UIBLOX-1-font-migration",
+			primary: false,
+			onDefaultBranch: false,
+			lastActivity: 20,
+		},
+		{
+			repository: { name: "uiblox", remote: "org/uiblox" },
+			path: "/src/uiblox-tokens",
+			branch: "UIBLOX-2-tokens",
+			primary: false,
+			onDefaultBranch: false,
+			lastActivity: 30,
+		},
+		{
+			repository: { name: "apps", remote: "org/apps" },
+			path: "/src/apps-uiblox-update",
+			branch: "UIBLOX-3-update",
+			primary: false,
+			onDefaultBranch: false,
+			lastActivity: 40,
+		},
+		{
+			repository: { name: "apps", remote: "org/apps" },
+			path: "/src/apps",
+			branch: "main",
+			primary: true,
+			onDefaultBranch: true,
+			lastActivity: 50,
+		},
+	],
+	pullRequests: [],
+};
+
+function searchPaths(query: string, currentPath?: string): string[] {
+	return buildItems(searchList, [], currentPath, "/home/me", query).flatMap((item) =>
+		item.target?.kind === "worktree" ? [item.target.worktree.path] : [],
+	);
+}
+
+test("a repository query lists its default-branch checkout first, then the most recently used", () => {
+	assert.deepEqual(searchPaths("uiblox"), [
+		"/src/uiblox",
+		"/src/apps-uiblox-update",
+		"/src/uiblox-tokens",
+		"/src/uiblox-migration",
+	]);
+});
+
+test("every query word must match", () => {
+	assert.deepEqual(searchPaths("uiblox m"), ["/src/uiblox", "/src/uiblox-migration"]);
+	assert.deepEqual(searchPaths("uiblox missing"), []);
+});
+
+test("default matches default-branch checkouts without naming the branch", () => {
+	assert.deepEqual(searchPaths("uiblox default"), ["/src/uiblox"]);
+	assert.deepEqual(searchPaths("default"), ["/src/apps", "/src/uiblox"]);
+});
+
+test("the current worktree still goes last when searching", () => {
+	assert.deepEqual(searchPaths("uiblox", "/src/uiblox"), [
+		"/src/apps-uiblox-update",
+		"/src/uiblox-tokens",
+		"/src/uiblox-migration",
+		"/src/uiblox",
+	]);
+});
+
+test("searching matches PR references and titles, and filters orphaned PRs", () => {
+	assert.deepEqual(
+		buildItems(list, [], undefined, "/home/me", "flipbook#482").map((item) => item.target?.kind),
+		["worktree"],
+	);
+	const items = buildItems(list, [], undefined, "/home/me", "loading race");
+	assert.equal(items.length, 2);
+	assert.ok(items[0].separator);
+	assert.equal(items[1].target?.kind, "pullRequest");
+});
+
 test("recordRecent moves a path to the front and caps the list", () => {
 	assert.deepEqual(recordRecent(["a", "b", "c"], "b"), ["b", "a", "c"]);
 	assert.deepEqual(recordRecent(["a", "b"], "c", 2), ["c", "a"]);

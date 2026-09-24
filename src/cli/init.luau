@@ -367,7 +367,7 @@ end
 local function list(deps: Resolved, options: ListOptions)
 	local value, cached = loadSnapshot(deps, options.refresh, options.pullRequests)
 	if options.json then
-		deps.write(json.serialize(snapshot.toJson(value), true))
+		deps.write(json.serialize(snapshot.toJson(value, deps.activity), true))
 		return
 	end
 	local sections: { string } = {}
