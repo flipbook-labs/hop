@@ -56,49 +56,89 @@ type ListOptions = {
 	json: boolean,
 }
 
-local COMMANDS: { [string]: boolean } = {
-	to = true,
-	list = true,
-	recent = true,
-	cursor = true,
-	help = true,
+local SUMMARY = "hop — jump from agent sessions and pull requests to local worktrees"
+
+local EXPRESSIONS = [[
+Expressions:
+  owner/repo#123, repo#123, #123, 123, or a PR URL
+  otherwise a branch, repository, folder name, or PR title fragment]]
+
+local COMMAND_HELP: { [string]: string } = {
+	to = "Open the worktree matching <expr> in VS Code",
+	list = "List worktrees with their pull requests",
+	recent = "List recent Cursor and Claude Code sessions",
+	cursor = "Resume a Cursor session in its workspace",
+	help = "Show help for Hop or one of its commands",
 }
 
-local HELP = [[
-hop — jump from agent sessions and pull requests to local worktrees
+type Parsers = {
+	root: batteriesCli.Parser,
+	commands: { [string]: batteriesCli.Parser },
+}
 
-USAGE:
-  hop <expr>                  Same as `hop to <expr>`
-  hop to <expr>               Open the worktree matching <expr> in VS Code
-  hop list [--refresh] [--no-pr] [--json]
-  hop recent [--limit N] [--repo OWNER/REPO] [--agent cursor|claude] [--json]
-  hop cursor [NUMBER|QUERY]
-  hop help
-
-EXPRESSIONS:
-  owner/repo#123, repo#123, #123, 123, or a PR URL
-  otherwise a branch, repository, folder name, or PR title fragment
-]]
-
-local function route(args: { string }): (string, { string })
-	local first = args[1]
-	if first == nil or first == "help" or first == "--help" or first == "-h" then
-		return "help", {}
-	end
-	if COMMANDS[first] then
-		return first, { table.unpack(args, 2) }
-	end
-	return "to", args
+local function addHelpFlag(parser: batteriesCli.Parser)
+	parser:add("help", "flag", { help = "Show this help", aliases = { "h" } })
 end
 
-local function recentOptions(args: { string }): RecentOptions
-	local parser = batteriesCli.parser()
-	parser:add("limit", "option", { default = "20" })
-	parser:add("repo", "option", {})
-	parser:add("agent", "option", {})
-	parser:add("json", "flag", {})
-	parser:parse(args)
+local function createParsers(): Parsers
+	local root = batteriesCli.parser()
+	addHelpFlag(root)
 
+	local commands: { [string]: batteriesCli.Parser } = {}
+	local function command(name: string): batteriesCli.Parser
+		local parser = root:subcommand(name, { help = COMMAND_HELP[name] })
+		addHelpFlag(parser)
+		commands[name] = parser
+		return parser
+	end
+
+	command("to"):add("expr", "variadic", { help = "Expression to match against worktrees and pull requests" })
+
+	local list = command("list")
+	list:add("refresh", "flag", { help = "Rebuild the cached list from Git and GitHub" })
+	list:add("no-pr", "flag", { help = "Skip GitHub pull request lookup" })
+	list:add("json", "flag", { help = "Print JSON" })
+
+	local recent = command("recent")
+	recent:add("limit", "option", { help = "Maximum number of sessions to show (default 20)", default = "20" })
+	recent:add("repo", "option", { help = "Only show sessions for OWNER/REPO" })
+	recent:add("agent", "option", { help = "Only show sessions from cursor or claude" })
+	recent:add("json", "flag", { help = "Print JSON" })
+
+	command("cursor"):add("query", "positional", { help = "Session number, title, id, or branch" })
+
+	command("help"):add("command", "positional", { help = "Command to describe" })
+
+	return { root = root, commands = commands }
+end
+
+-- A leading word that is not a command is an expression for `hop to`.
+local function withDefaultCommand(args: { string }): { string }
+	local first = args[1]
+	if first == nil or first:sub(1, 1) == "-" or COMMAND_HELP[first] then
+		return args
+	end
+	return { "to", table.unpack(args) }
+end
+
+local function rootHelp(parser: batteriesCli.Parser): string
+	return table.concat({
+		SUMMARY,
+		"",
+		parser:usage("hop"),
+		"       hop <expr>  Same as `hop to <expr>`",
+		"",
+		parser:help(),
+		"",
+		EXPRESSIONS,
+	}, "\n")
+end
+
+local function commandHelp(name: string, parser: batteriesCli.Parser): string
+	return `{COMMAND_HELP[name]}\n\n{parser:usage(`hop {name}`)}\n\n{parser:help()}`
+end
+
+local function recentOptions(parser: batteriesCli.Parser): RecentOptions
 	local limit = tonumber(parser:get("limit"))
 	assert(limit and limit >= 0 and limit % 1 == 0, "--limit must be a non-negative integer")
 	local agent = parser:get("agent")
@@ -111,12 +151,7 @@ local function recentOptions(args: { string }): RecentOptions
 	}
 end
 
-local function listOptions(args: { string }): ListOptions
-	local parser = batteriesCli.parser()
-	parser:add("refresh", "flag", {})
-	parser:add("no-pr", "flag", {})
-	parser:add("json", "flag", {})
-	parser:parse(args)
+local function listOptions(parser: batteriesCli.Parser): ListOptions
 	return {
 		refresh = parser:has("refresh"),
 		pullRequests = not parser:has("no-pr"),
@@ -385,17 +420,35 @@ local function to(deps: Resolved, args: { string })
 end
 
 local function execute(args: { string }, options: Dependencies?)
-	local command, trailing = route(args)
+	local parsers = createParsers()
+	parsers.root:parse(withDefaultCommand(args))
 	local deps = dependencies(options)
 
-	if command == "help" then
-		deps.write(HELP)
-	elseif command == "to" then
-		to(deps, trailing)
+	local command, parser = parsers.root:selected()
+	if command == "help" and parser then
+		local topic = parser:get("command")
+		if topic then
+			local topicParser = parsers.commands[topic]
+			assert(topicParser, `unknown command: {topic}`)
+			deps.write(commandHelp(topic, topicParser))
+			return
+		end
+	end
+	if command == nil or parser == nil or command == "help" or parsers.root:has("help") then
+		deps.write(rootHelp(parsers.root))
+		return
+	end
+	if parser:has("help") then
+		deps.write(commandHelp(command, parser))
+		return
+	end
+
+	if command == "to" then
+		to(deps, parser:variadics())
 	elseif command == "list" then
-		list(deps, listOptions(trailing))
+		list(deps, listOptions(parser))
 	elseif command == "recent" then
-		local selectedOptions = recentOptions(trailing)
+		local selectedOptions = recentOptions(parser)
 		local items = filteredRecent(recentItems(deps.loadSessions(), deps.loadWorktrees()), selectedOptions)
 		attachPullRequests(items, deps.runner)
 		if selectedOptions.json then
@@ -414,7 +467,7 @@ local function execute(args: { string }, options: Dependencies?)
 				table.insert(cursorItems, item)
 			end
 		end
-		local selected = selectItem(cursorItems, trailing[1], deps.input, deps.write)
+		local selected = selectItem(cursorItems, parser:get("query"), deps.input, deps.write)
 		assert(selected, "no matching Cursor session found")
 		local target = assert(itemWorktree(selected), "Cursor session has no workspace")
 		editor.resume(tostring(target.path), selected.session.id, deps.runner)
@@ -425,15 +478,13 @@ end
 local function run(argv: { string })
 	local ok, message = pcall(execute, { table.unpack(argv, 2) }, nil)
 	if not ok then
-		print(`Error: {message}`)
+		local text = tostring(message):gsub("^[^\n]-:%d+: ", "", 1)
+		print(`Error: {text}`)
 		process.exit(1)
 	end
 end
 
 return table.freeze({
 	execute = execute,
-	listOptions = listOptions,
-	recentOptions = recentOptions,
-	route = route,
 	run = run,
 })

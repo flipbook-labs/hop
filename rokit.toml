@@ -1,5 +1,5 @@
 [tools]
-lute = "luau-lang/lute@1.0.1-nightly.20260819"
+lute = "luau-lang/lute@1.0.1-nightly.20260924"
 stylua = "JohnnyMorganz/stylua@2.5.2"
 selene = "Kampfkarren/selene@0.29.0"
 changewrite = "flipbook-labs/changewrite@0.7.0"
