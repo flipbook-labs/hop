@@ -37,14 +37,16 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	function updateStatus(): void {
 		const current = workspace.activePath();
-		if (!workspace.isShell() || current === undefined) {
+		if (current === undefined) {
 			status.hide();
 			return;
 		}
 		const worktree = latest?.worktrees.find((candidate) => candidate.path === current);
-		const name = worktree
-			? `${worktree.repository.name} · ${worktree.branch ?? "detached"}`
-			: (vscode.workspace.workspaceFolders?.[1]?.name ?? current);
+		if (!worktree) {
+			status.hide();
+			return;
+		}
+		const name = `${worktree.repository.name} · ${worktree.branch ?? "detached"}`;
 		const pullRequest = worktree?.pr ? ` · #${worktree.pr.number}` : "";
 		status.text = `$(git-branch) ${name}${pullRequest}`;
 		status.show();
@@ -54,7 +56,6 @@ export function activate(context: vscode.ExtensionContext): void {
 		await context.globalState.update(RECENT_KEY, recordRecent(recent(), worktree.path));
 		await workspace.switchTo({
 			path: worktree.path,
-			name: `${worktree.repository.name} · ${worktree.branch ?? "detached"}`,
 		});
 		updateStatus();
 	}
@@ -98,7 +99,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.workspace.onDidChangeWorkspaceFolders(updateStatus)
 	);
 
-	if (workspace.isShell()) {
+	if (workspace.activePath() !== undefined) {
 		updateStatus();
 		cached().catch(() => undefined);
 	}
