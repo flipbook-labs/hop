@@ -396,7 +396,7 @@ local function to(deps: Resolved, args: { string })
 		return render.entryLabel(entry, deps.homeDirectory)
 	end, deps.input, deps.write)
 	assert(selected, "no worktree selected")
-	editor.open(tostring(selected.worktree.path), deps.runner, deps.homeDirectory)
+	editor.open(tostring(selected.worktree.path), deps.runner)
 end
 
 local function execute(args: { string }, options: Dependencies?)
