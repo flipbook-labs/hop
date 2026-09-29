@@ -26,11 +26,18 @@ const REFRESH: vscode.QuickInputButton = {
 // Cached results older than this are refreshed in the background while the picker is open.
 const STALE_SECONDS = 60;
 
+function pullRequestUrl(target: Target | undefined): string | undefined {
+	if (target?.kind === "worktree") {
+		return target.worktree.pr?.url;
+	}
+	return target?.kind === "pullRequest" ? target.pullRequest.url : undefined;
+}
+
 function toPickItem(item: Item): PickItem {
 	if (item.separator) {
 		return { label: item.label, kind: vscode.QuickPickItemKind.Separator };
 	}
-	const hasPullRequest = item.target?.kind === "worktree" && item.target.worktree.pr !== undefined;
+	const hasPullRequest = pullRequestUrl(item.target) !== undefined;
 	return {
 		label: item.label,
 		description: item.description,
@@ -46,8 +53,8 @@ export function openPullRequest(url: string): void {
 	void vscode.env.openExternal(vscode.Uri.parse(url));
 }
 
-// Resolves with the selected worktree, or undefined when the picker closes without one.
-// Pull request rows without a worktree open in the browser instead.
+// Resolves with the selected row's target, or undefined when the picker closes without one.
+// Rows with a pull request open it in the browser from their button.
 export function pick(source: PickerSource): Promise<Target | undefined> {
 	const picker = vscode.window.createQuickPick<PickItem>();
 	picker.placeholder =
@@ -109,18 +116,13 @@ export function pick(source: PickerSource): Promise<Target | undefined> {
 	return new Promise((resolve) => {
 		picker.onDidTriggerButton(() => void refresh());
 		picker.onDidTriggerItemButton(({ item }) => {
-			if (item.target?.kind === "worktree" && item.target.worktree.pr) {
-				openPullRequest(item.target.worktree.pr.url);
+			const url = pullRequestUrl(item.target);
+			if (url) {
+				openPullRequest(url);
 			}
 		});
 		picker.onDidAccept(() => {
-			const target = picker.selectedItems[0]?.target;
-			if (target?.kind === "pullRequest") {
-				openPullRequest(target.pullRequest.url);
-				picker.hide();
-				return;
-			}
-			resolve(target);
+			resolve(picker.selectedItems[0]?.target);
 			picker.hide();
 		});
 		picker.onDidHide(() => {

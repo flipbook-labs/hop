@@ -95,20 +95,13 @@ function referenceMatches(reference: PullRequestReference, pullRequest: HopPullR
 	);
 }
 
-// Mirrors `hop to`: a full reference names its repository; otherwise the PR must be the only known
-// match, or the repository name must match exactly one known repository.
-function checkoutTarget(
-	list: HopList,
-	reference: PullRequestReference,
-	pullRequests: HopPullRequest[],
-): Target | undefined {
+// For a PR Hop does not know about. Mirrors `hop to`: a full reference names its repository;
+// otherwise the repository name must match exactly one known repository.
+function checkoutTarget(list: HopList, reference: PullRequestReference): Target | undefined {
 	if (reference.repository) {
 		return { kind: "checkout", repository: reference.repository, number: reference.number };
 	}
-	if (pullRequests.length === 1) {
-		return { kind: "checkout", repository: pullRequests[0].repository, number: reference.number };
-	}
-	if (pullRequests.length > 1 || !reference.repositoryName) {
+	if (!reference.repositoryName) {
 		return undefined;
 	}
 	const repositories = new Map<string, string>();
@@ -140,17 +133,13 @@ function pullRequestReferenceItems(
 	if (worktrees.length > 0) {
 		return worktrees.map((worktree) => worktreeItem(worktree, home, worktree.path === currentPath));
 	}
+	// Known PRs without a worktree check out from their own rows.
 	const pullRequests = list.pullRequests.filter((pullRequest) => referenceMatches(reference, pullRequest));
-	const items: Item[] = [];
-	const target = checkoutTarget(list, reference, pullRequests);
-	if (target?.kind === "checkout") {
-		items.push(checkoutItem(target));
-	}
 	if (pullRequests.length > 0) {
-		items.push({ label: "Pull requests without a worktree", separator: true });
-		items.push(...pullRequests.map(pullRequestItem));
+		return [{ label: "Pull requests without a worktree", separator: true }, ...pullRequests.map(pullRequestItem)];
 	}
-	return items;
+	const target = checkoutTarget(list, reference);
+	return target?.kind === "checkout" ? [checkoutItem(target)] : [];
 }
 
 export function worktreeItem(worktree: HopWorktree, home: string, current: boolean): Item {

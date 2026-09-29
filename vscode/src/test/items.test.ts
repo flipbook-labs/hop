@@ -205,7 +205,7 @@ test("a pasted PR URL without a worktree offers to check it out", () => {
 });
 
 test("short PR references offer a checkout only when they name one repository", () => {
-	assert.deepEqual(kinds("#491"), ["checkout", undefined, "pullRequest"]);
+	assert.deepEqual(kinds("#491"), [undefined, "pullRequest"]);
 	assert.deepEqual(kinds("hop#7"), ["checkout"]);
 	assert.deepEqual(kinds("#7"), []);
 	assert.deepEqual(kinds("missing#7"), []);
