@@ -95,6 +95,12 @@ function referenceMatches(reference: PullRequestReference, pullRequest: HopPullR
 	);
 }
 
+// Hop checks fork PRs out as `pr-<number>`. GitHub listings skip fork PRs, so the branch is the only link.
+function isForkCheckout(worktree: HopWorktree, reference: PullRequestReference): boolean {
+	const remote = worktree.repository.remote;
+	return worktree.branch === `pr-${reference.number}` && remote !== undefined && repositoryMatches(reference, remote);
+}
+
 // For a PR Hop does not know about. Mirrors `hop to`: a full reference names its repository;
 // otherwise the repository name must match exactly one known repository.
 function checkoutTarget(list: HopList, reference: PullRequestReference): Target | undefined {
@@ -129,7 +135,9 @@ function pullRequestReferenceItems(
 	home: string,
 	currentPath: string | undefined,
 ): Item[] {
-	const worktrees = list.worktrees.filter((worktree) => referenceMatches(reference, worktree.pr));
+	const worktrees = list.worktrees.filter(
+		(worktree) => referenceMatches(reference, worktree.pr) || isForkCheckout(worktree, reference),
+	);
 	if (worktrees.length > 0) {
 		return worktrees.map((worktree) => worktreeItem(worktree, home, worktree.path === currentPath));
 	}

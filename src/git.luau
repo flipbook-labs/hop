@@ -226,13 +226,16 @@ local function addPullRequestWorktree(checkout: PullRequestCheckout, runner: typ
 	end
 
 	local branch = checkout.branch
+	local source = if checkout.crossRepository then `refs/pull/{checkout.number}/head` else `refs/heads/{branch}`
 	if checkout.crossRepository then
-		mustRun(run, command("fetch", "origin", `refs/pull/{checkout.number}/head`))
+		mustRun(run, command("fetch", "origin", source))
 	else
-		mustRun(run, command("fetch", "origin", `+refs/heads/{branch}:refs/remotes/origin/{branch}`))
+		mustRun(run, command("fetch", "origin", `+{source}:refs/remotes/origin/{branch}`))
 	end
 	local exists = commandOutput(run, command("show-ref", "--verify", "--quiet", `refs/heads/{branch}`)) ~= nil
 	if exists then
+		-- Without `+`, Git only fast-forwards, so a local branch with its own commits is left alone.
+		commandOutput(run, command("fetch", "origin", `{source}:refs/heads/{branch}`))
 		mustRun(run, command("worktree", "add", checkout.path, branch))
 	elseif checkout.crossRepository then
 		mustRun(run, command("worktree", "add", "-b", branch, checkout.path, "FETCH_HEAD"))

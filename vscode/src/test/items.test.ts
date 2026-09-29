@@ -204,6 +204,25 @@ test("a pasted PR URL without a worktree offers to check it out", () => {
 	assert.deepEqual(items[0].target, { kind: "checkout", repository: "Roblox/foundation", number: 2186 });
 });
 
+test("a pasted fork PR URL lists its pr-<number> worktree", () => {
+	const forks: HopList = {
+		...list,
+		worktrees: [
+			...list.worktrees,
+			{
+				repository: { name: "flipbook", remote: "flipbook-labs/flipbook" },
+				path: "/home/me/git/flipbook-pr-558",
+				branch: "pr-558",
+				primary: false,
+			},
+		],
+	};
+	const items = buildItems(forks, [], undefined, "/home/me", "https://github.com/flipbook-labs/flipbook/pull/558");
+	assert.equal(items.length, 1);
+	const target = items[0].target;
+	assert.equal(target?.kind === "worktree" && target.worktree.path, "/home/me/git/flipbook-pr-558");
+});
+
 test("short PR references offer a checkout only when they name one repository", () => {
 	assert.deepEqual(kinds("#491"), [undefined, "pullRequest"]);
 	assert.deepEqual(kinds("hop#7"), ["checkout"]);

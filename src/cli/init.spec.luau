@@ -325,11 +325,12 @@ test.case("to checks out fork PRs from refs/pull into a PR-named branch", functi
 	assert.eq(lastCommand(commands)[2], "/src/widgets-pr-8")
 end)
 
-test.case("to reuses an existing local branch for a PR checkout", function(assert)
+test.case("to fast-forwards and reuses an existing local branch for a PR checkout", function(assert)
 	local commands: { { string } } = {}
 	cli.execute({ "widgets#10" }, (toDependencies(commands, {})))
 	local gitCommands = commandsFrom(commands, "git")
-	assert.eq(gitCommands[3], "git -C /src/widgets worktree add /src/widgets-pr-10 existing")
+	assert.eq(gitCommands[3], "git -C /src/widgets fetch origin refs/heads/existing:refs/heads/existing")
+	assert.eq(gitCommands[4], "git -C /src/widgets worktree add /src/widgets-pr-10 existing")
 end)
 
 test.case("to opens a worktree already on a PR's branch instead of adding one", function(assert)
