@@ -193,7 +193,55 @@ local function lastActivity(worktree: types.Worktree): number
 	return if ok then metadata.modified:toSeconds() else 0
 end
 
+export type PullRequestCheckout = {
+	primary: string,
+	path: string,
+	number: number,
+	branch: string,
+	crossRepository: boolean,
+}
+
+local function mustRun(runner: types.CommandRunner, argv: { string })
+	local ok, result = pcall(runner, argv)
+	if not ok then
+		error(`unable to run git: {result}`, 0)
+	elseif not result.ok then
+		error(`git {argv[4]} failed: {trim(result.stderr)}`, 0)
+	end
+end
+
+-- Adds a linked worktree at `checkout.path` for a PR's head, reusing the local branch when it exists.
+-- Same-repository PRs track `origin/<branch>`. Fork PRs have no remote branch in `origin`, so their
+-- head is fetched from `refs/pull/<number>/head` into a local branch without an upstream.
+local function addPullRequestWorktree(checkout: PullRequestCheckout, runner: types.CommandRunner?)
+	local run = runner or defaultRun
+	local git = { "git", "-C", checkout.primary }
+	local function command(...: string): { string }
+		local argv = table.clone(git)
+		for _, value in { ... } do
+			table.insert(argv, value)
+		end
+		return argv
+	end
+
+	local branch = checkout.branch
+	if checkout.crossRepository then
+		mustRun(run, command("fetch", "origin", `refs/pull/{checkout.number}/head`))
+	else
+		mustRun(run, command("fetch", "origin", `+refs/heads/{branch}:refs/remotes/origin/{branch}`))
+	end
+	local exists = commandOutput(run, command("show-ref", "--verify", "--quiet", `refs/heads/{branch}`)) ~= nil
+	if exists then
+		mustRun(run, command("worktree", "add", checkout.path, branch))
+	elseif checkout.crossRepository then
+		mustRun(run, command("worktree", "add", "-b", branch, checkout.path, "FETCH_HEAD"))
+	else
+		mustRun(run, command("worktree", "add", "--track", "-b", branch, checkout.path, `origin/{branch}`))
+	end
+end
+
 return table.freeze({
+	addPullRequestWorktree = addPullRequestWorktree,
 	discover = discover,
 	lastActivity = lastActivity,
 	parseWorktreeList = parseWorktreeList,

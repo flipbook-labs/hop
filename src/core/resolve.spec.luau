@@ -130,3 +130,35 @@ test.case("orphaned PRs match when every word is in the title", function(assert)
 	assert.eq(#resolve.resolve(value, resolve.parse("loading story")).pullRequests, 1)
 	assert.eq(#resolve.resolve(value, resolve.parse("story widgets")).pullRequests, 0)
 end)
+
+local function checkoutTarget(value: snapshot.Snapshot, text: string): resolve.CheckoutTarget?
+	local expression = resolve.parse(text)
+	return resolve.checkoutTarget(value, expression, resolve.resolve(value, expression))
+end
+
+test.case("a worktree-less PR expression names one PR to check out", function(assert)
+	local value = snapshot.build(worktrees, {
+		{
+			number = 7,
+			url = "https://github.com/org/apps/pull/7",
+			branch = "story-loading",
+			repository = "org/apps",
+			state = "OPEN",
+		},
+	}, 0)
+
+	local url = checkoutTarget(value, "https://github.com/Other/thing/pull/5") or error("expected a target")
+	assert.eq(url.repository, "Other/thing")
+	assert.eq(url.number, 5)
+
+	local known = checkoutTarget(value, "#7") or error("expected a target")
+	assert.eq(known.repository, "org/apps")
+
+	local named = checkoutTarget(value, "uiblox#12") or error("expected a target")
+	assert.eq(named.repository, "org/uiblox")
+	assert.eq(named.number, 12)
+
+	assert.eq(checkoutTarget(value, "#12"), nil)
+	assert.eq(checkoutTarget(value, "missing#12"), nil)
+	assert.eq(checkoutTarget(value, "uiblox"), nil)
+end)

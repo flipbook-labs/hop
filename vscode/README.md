@@ -6,7 +6,7 @@ The first switch reloads the window once into a Hop workspace (`~/.hop/shell.cod
 
 `hop <expr>` in a terminal hands off to the extension through `vscode://flipbook-labs.hop/to?path=…` and switches the most recently focused window.
 
-Pull requests without a local worktree appear at the end of the list and open in the browser. Worktree rows with a PR have a button to open it.
+Pull requests without a local worktree appear at the end of the list and open in the browser. Worktree rows with a PR have a button to open it. Pasting a PR URL (or typing `owner/repo#123`) shows that PR's worktree, or a **Check out** row that runs `hop to` to create the worktree and switch to it.
 
 ## Install
 

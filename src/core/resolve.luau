@@ -192,6 +192,36 @@ local function resolveQuery(value: snapshot.Snapshot, text: string, activity: Ac
 	return { entries = entries, pullRequests = pullRequests }
 end
 
+export type CheckoutTarget = {
+	repository: string,
+	number: number,
+}
+
+-- The single PR a worktree-less PR expression names, so Hop can check it out. `owner/repo#N` and
+-- URLs name one outright; otherwise the PR must be the only match among known PRs or known repositories.
+local function checkoutTarget(value: snapshot.Snapshot, expression: Expression, resolution: Resolution): CheckoutTarget?
+	if expression.kind ~= "pullRequest" or #resolution.entries > 0 then
+		return nil
+	elseif expression.repository then
+		return { repository = expression.repository, number = expression.number }
+	elseif #resolution.pullRequests == 1 then
+		return { repository = resolution.pullRequests[1].repository, number = expression.number }
+	elseif #resolution.pullRequests > 1 or expression.repositoryName == nil then
+		return nil
+	end
+	local found: string? = nil
+	for _, entry in value.entries do
+		local repository = entry.worktree.repository
+		if repository and repositoryMatches(expression, repository) then
+			if found and found:lower() ~= repository:lower() then
+				return nil
+			end
+			found = repository
+		end
+	end
+	return if found then { repository = found, number = expression.number } else nil
+end
+
 local function noActivity(_worktree: types.Worktree): number
 	return 0
 end
@@ -204,6 +234,7 @@ local function resolve(value: snapshot.Snapshot, expression: Expression, activit
 end
 
 return table.freeze({
+	checkoutTarget = checkoutTarget,
 	parse = parse,
 	resolve = resolve,
 })

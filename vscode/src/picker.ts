@@ -50,7 +50,8 @@ export function openPullRequest(url: string): void {
 // Pull request rows without a worktree open in the browser instead.
 export function pick(source: PickerSource): Promise<Target | undefined> {
 	const picker = vscode.window.createQuickPick<PickItem>();
-	picker.placeholder = "Search worktrees by repository, branch, PR number, or PR title; `default` for the default branch";
+	picker.placeholder =
+		"Search worktrees by repository, branch, PR number, PR title, or PR URL; `default` for the default branch";
 	picker.matchOnDescription = true;
 	picker.matchOnDetail = true;
 	// Keeps Hop's ordering while filtering. It is missing from the stable typings, but the

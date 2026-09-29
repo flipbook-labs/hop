@@ -67,6 +67,14 @@ export function activate(context: vscode.ExtensionContext): void {
 			const target = await pick({ cached, refresh, recent, currentPath: workspace.activePath });
 			if (target?.kind === "worktree") {
 				await go(target.worktree).catch(report);
+			} else if (target?.kind === "checkout") {
+				const expression = `${target.repository}#${target.number}`;
+				await vscode.window
+					.withProgress(
+						{ location: vscode.ProgressLocation.Notification, title: `Hop: checking out ${expression}` },
+						() => hop.to(hopPath(), expression)
+					)
+					.then(undefined, report);
 			}
 		}),
 		vscode.commands.registerCommand("hop.refresh", () =>

@@ -7,6 +7,7 @@ local process = require("@std/process")
 local Claude = require("@root/providers/claude")
 local Cursor = require("@root/providers/cursor")
 local cache = require("@root/cache")
+local checkout = require("@root/checkout")
 local defaultRun = require("@root/command")
 local editor = require("@root/editor")
 local git = require("@root/git")
@@ -63,6 +64,7 @@ local SUMMARY = "hop — jump from agent sessions and pull requests to local wor
 local EXPRESSIONS = [[
 Expressions:
   owner/repo#123, repo#123, #123, 123, or a PR URL
+  a PR without a local worktree is checked out beside the repository as <folder>-pr-<number>
   otherwise words that each match a branch, repository, folder name, or PR title
   `default` matches a repository's default branch, as in `hop flipbook default`
   A repository's default-branch checkout is listed first, then the most recently used]]
@@ -415,7 +417,18 @@ local function to(deps: Resolved, args: { string })
 		resolution = resolve.resolve(value, expression, deps.activity)
 	end
 	if #resolution.entries == 0 then
-		error(noWorktreeMessage(text, resolution.pullRequests), 0)
+		local target = resolve.checkoutTarget(value, expression, resolution)
+		if target == nil then
+			error(noWorktreeMessage(text, resolution.pullRequests), 0)
+		end
+		local result = checkout.pullRequest(value, target, deps.runner)
+		deps.cache.write(value)
+		local worktreePath = tostring(result.entry.worktree.path)
+		if result.created then
+			deps.write(`Checked out {target.repository}#{target.number} in {worktreePath}`)
+		end
+		editor.open(worktreePath, deps.runner, deps.homeDirectory)
+		return
 	end
 	local selected = render.chooseWith(resolution.entries, function(entry)
 		return render.entryLabel(entry, deps.homeDirectory)

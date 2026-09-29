@@ -39,8 +39,7 @@ export function resolveHopPath(extensionPath: string, configured: string): strin
 	return existsSync(bundled) ? bundled : "hop";
 }
 
-export function list(hop: string, refresh: boolean): Promise<HopList> {
-	const args = ["list", "--json", ...(refresh ? ["--refresh"] : [])];
+function run(hop: string, args: string[]): Promise<string> {
 	return new Promise((resolve, reject) => {
 		execFile(hop, args, { maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => {
 			if (error) {
@@ -49,11 +48,22 @@ export function list(hop: string, refresh: boolean): Promise<HopList> {
 				reject(new Error(`hop ${args.join(" ")} failed: ${message}`));
 				return;
 			}
-			try {
-				resolve(JSON.parse(stdout) as HopList);
-			} catch {
-				reject(new Error("hop returned invalid JSON"));
-			}
+			resolve(stdout);
 		});
 	});
+}
+
+export async function list(hop: string, refresh: boolean): Promise<HopList> {
+	const stdout = await run(hop, ["list", "--json", ...(refresh ? ["--refresh"] : [])]);
+	try {
+		return JSON.parse(stdout) as HopList;
+	} catch {
+		throw new Error("hop returned invalid JSON");
+	}
+}
+
+// Opens the worktree for `expression`, checking out a PR first when needed. Hop hands the folder
+// back to this extension through its URI handler.
+export async function to(hop: string, expression: string): Promise<void> {
+	await run(hop, ["to", expression]);
 }

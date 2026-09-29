@@ -26,12 +26,7 @@ local function pullRequestKey(repository: string, branch: string): string
 	return `{repository}\0{branch}`
 end
 
--- Fork PRs are skipped because their head branch names belong to another repository.
-local function parsePullRequest(value: json.Value, repository: string): PullRequest?
-	local object = json.asObject(value)
-	if object == nil or object.isCrossRepository == true then
-		return nil
-	end
+local function pullRequestFromObject(object: json.Object, repository: string): PullRequest?
 	local number = object.number
 	local branch = object.headRefName
 	local url = object.url
@@ -50,6 +45,15 @@ local function parsePullRequest(value: json.Value, repository: string): PullRequ
 		state = if type(state) == "string" then state else nil,
 		draft = if type(draft) == "boolean" then draft else nil,
 	}
+end
+
+-- Fork PRs are skipped because their head branch names belong to another repository.
+local function parsePullRequest(value: json.Value, repository: string): PullRequest?
+	local object = json.asObject(value)
+	if object == nil or object.isCrossRepository == true then
+		return nil
+	end
+	return pullRequestFromObject(object, repository)
 end
 
 -- gh exits non-zero when part of a query fails but still prints the data that resolved.
@@ -257,8 +261,37 @@ local function indexPullRequests(pullRequests: { PullRequest }): { [string]: Pul
 	return result
 end
 
+-- One PR by number, including fork PRs. `repository` is the spelling to record on the result.
+local function viewPullRequest(repository: string, number: number, runner: types.CommandRunner?): (PullRequest, boolean)
+	local run = runner or defaultRun
+	local ok, response = pcall(run, {
+		"gh",
+		"pr",
+		"view",
+		tostring(number),
+		"--repo",
+		repository,
+		"--json",
+		(NODE_FIELDS:gsub(" ", ",")),
+	})
+	if not ok then
+		error(`unable to run gh: {response}`, 0)
+	elseif not response.ok then
+		local detail = response.stderr:match("^%s*(.-)%s*$") or ""
+		error(`unable to look up {repository}#{number}: {detail}`, 0)
+	end
+	local decodedOk, decoded = pcall(json.deserialize, response.stdout)
+	local object = if decodedOk then json.asObject(decoded) else nil
+	local pullRequest = if object then pullRequestFromObject(object, repository) else nil
+	if object == nil or pullRequest == nil then
+		error(`gh returned an unexpected response for {repository}#{number}`, 0)
+	end
+	return pullRequest, object.isCrossRepository == true
+end
+
 return table.freeze({
 	indexPullRequests = indexPullRequests,
 	listPullRequests = listPullRequests,
 	pullRequestKey = pullRequestKey,
+	viewPullRequest = viewPullRequest,
 })
