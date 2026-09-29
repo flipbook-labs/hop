@@ -109,11 +109,19 @@ test.case("default matches default-branch checkouts without naming the branch", 
 	assert.eq(#paths("trunk default"), 0)
 end)
 
-test.case("an exact branch name only returns worktrees on that branch", function(assert)
-	local matches = paths("master")
-	assert.eq(#matches, 2)
-	assert.eq(matches[1], "/src/uiblox")
-	assert.eq(matches[2], "/src/legacy")
+test.case("an exact branch name lists worktrees on that branch first without hiding other matches", function(assert)
+	local value = snapshot.build({
+		worktree("/src/hop", "main", "org/hop", "main", true),
+		worktree("/src/hop-hop", "hop", "org/hop", "main"),
+		worktree("/src/hop-feature", "feature", "org/hop", "main"),
+	}, {}, 0)
+	local result: { string } = {}
+	for _, entry in resolve.resolve(value, resolve.parse("hop"), activity).entries do
+		table.insert(result, tostring(entry.worktree.path))
+	end
+	assert.eq(#result, 3)
+	assert.eq(result[1], "/src/hop-hop")
+	assert.eq(result[2], "/src/hop")
 end)
 
 test.case("orphaned PRs match when every word is in the title", function(assert)

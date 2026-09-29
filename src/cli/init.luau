@@ -67,7 +67,7 @@ Expressions:
   a PR without a local worktree is checked out beside the repository as <folder>-pr-<number>
   otherwise words that each match a branch, repository, folder name, or PR title
   `default` matches a repository's default branch, as in `hop flipbook default`
-  A repository's default-branch checkout is listed first, then the most recently used]]
+  A repository's default-branch checkout is listed first, then the most recently changed]]
 
 local COMMAND_HELP: { [string]: string } = {
 	to = "Open the worktree matching <expr> in VS Code",

@@ -221,7 +221,7 @@ function namesDefaultCheckout(worktree: HopWorktree, queryWords: string[]): bool
 // A PR reference lists the worktree for that PR, or offers to check it out.
 // Without a query: recently picked worktrees first, then everything else by repository.
 // With a query: every word must match a branch, folder, repository, or PR; a named repository's
-// default-branch checkout comes first, then the most recently used. The current worktree goes last.
+// default-branch checkout comes first, then the most recently changed. The current worktree goes last.
 export function buildItems(
 	list: HopList,
 	recent: string[],

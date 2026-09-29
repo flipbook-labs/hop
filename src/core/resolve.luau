@@ -130,15 +130,25 @@ local function namesDefaultCheckout(entry: snapshot.Entry, queryWords: { string 
 	return false
 end
 
+local function isExactBranch(entry: snapshot.Entry, normalized: string): boolean
+	local branch = entry.worktree.branch
+	return branch ~= nil and branch:lower() == normalized
+end
+
 local function sortEntries(entries: { snapshot.Entry }, queryWords: { string }, activity: Activity)
+	local normalized = table.concat(queryWords, " ")
+	local exact: { [snapshot.Entry]: boolean } = {}
 	local pinned: { [snapshot.Entry]: boolean } = {}
 	local lastUsed: { [snapshot.Entry]: number } = {}
 	for _, entry in entries do
+		exact[entry] = isExactBranch(entry, normalized)
 		pinned[entry] = namesDefaultCheckout(entry, queryWords)
 		lastUsed[entry] = activity(entry.worktree)
 	end
 	table.sort(entries, function(left: snapshot.Entry, right: snapshot.Entry)
-		if pinned[left] ~= pinned[right] then
+		if exact[left] ~= exact[right] then
+			return exact[left]
+		elseif pinned[left] ~= pinned[right] then
 			return pinned[left]
 		elseif lastUsed[left] ~= lastUsed[right] then
 			return lastUsed[left] > lastUsed[right]
@@ -147,31 +157,23 @@ local function sortEntries(entries: { snapshot.Entry }, queryWords: { string }, 
 	end)
 end
 
--- Every word must match an entry's branch, folder, repository, or PR title. A query that is
--- exactly a branch name only returns worktrees on that branch.
+-- Every word must match an entry's branch, folder, repository, or PR title. Worktrees whose branch
+-- is exactly the query come first, then a named repository's default-branch checkout, then the
+-- most recently changed.
 local function resolveQuery(value: snapshot.Snapshot, text: string, activity: Activity): Resolution
 	local queryWords = words(text)
-	local normalized = table.concat(queryWords, " ")
 
 	local entries: { snapshot.Entry } = {}
 	for _, entry in value.entries do
-		local branch = entry.worktree.branch
-		if branch and branch:lower() == normalized then
-			table.insert(entries, entry)
+		local matched = true
+		for _, word in queryWords do
+			if not entryMatches(entry, word) then
+				matched = false
+				break
+			end
 		end
-	end
-	if #entries == 0 then
-		for _, entry in value.entries do
-			local matched = true
-			for _, word in queryWords do
-				if not entryMatches(entry, word) then
-					matched = false
-					break
-				end
-			end
-			if matched then
-				table.insert(entries, entry)
-			end
+		if matched then
+			table.insert(entries, entry)
 		end
 	end
 	sortEntries(entries, queryWords, activity)
