@@ -22,8 +22,13 @@ local function label(item: RecentItem): string
 end
 
 local function tildePath(value: string, homeDirectory: string?): string
-	if homeDirectory and homeDirectory ~= "" and value:sub(1, #homeDirectory) == homeDirectory then
-		return "~" .. value:sub(#homeDirectory + 1)
+	local home = if homeDirectory then homeDirectory:gsub("/+$", "") else ""
+	if home == "" then
+		return value
+	elseif value == home then
+		return "~"
+	elseif value:sub(1, #home + 1) == home .. "/" then
+		return "~" .. value:sub(#home + 1)
 	end
 	return value
 end

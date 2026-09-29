@@ -90,6 +90,7 @@ local function fetchBranches(batch: { Lookup }, run: types.CommandRunner): { Pul
 		table.insert(
 			selections,
 			`branch{index}: repository(owner: $owner{index}, name: $name{index}) \{ defaultBranchRef \{ name } `
+				.. `openPullRequests: pullRequests(headRefName: $branch{index}, states: OPEN, first: 5, orderBy: \{field: CREATED_AT, direction: DESC}) \{ nodes \{ {NODE_FIELDS} } } `
 				.. `pullRequests(headRefName: $branch{index}, first: 5, orderBy: \{field: CREATED_AT, direction: DESC}) \{ nodes \{ {NODE_FIELDS} } } }`
 		)
 		variables[`owner{index}`] = owner or ""
@@ -100,7 +101,7 @@ local function fetchBranches(batch: { Lookup }, run: types.CommandRunner): { Pul
 	local result: { PullRequest } = {}
 	local data = query(run, `query({table.concat(declarations, ", ")}) \{ {table.concat(selections, " ")} }`, variables)
 	if data == nil then
-		return result
+		error("pull request lookup failed")
 	end
 	for index, lookup in batch do
 		local repository = json.asObject(data[`branch{index}`])
@@ -111,10 +112,13 @@ local function fetchBranches(batch: { Lookup }, run: types.CommandRunner): { Pul
 		if defaultBranch and defaultBranch.name == lookup.branch then
 			continue
 		end
-		for _, value in nodes(repository.pullRequests) do
-			local pullRequest = parsePullRequest(value, lookup.repository)
-			if pullRequest then
-				table.insert(result, pullRequest)
+		-- Open PRs are fetched separately so newer closed PRs on a reused branch cannot crowd them out.
+		for _, connection in { repository.openPullRequests, repository.pullRequests } do
+			for _, value in nodes(connection) do
+				local pullRequest = parsePullRequest(value, lookup.repository)
+				if pullRequest then
+					table.insert(result, pullRequest)
+				end
 			end
 		end
 	end
@@ -144,7 +148,7 @@ local function fetchAuthored(repositories: { [string]: string }, run: types.Comm
 		local viewer = if data then json.asObject(data.viewer) else nil
 		local connection = if viewer then json.asObject(viewer.pullRequests) else nil
 		if connection == nil then
-			break
+			error("authored pull request lookup failed")
 		end
 		for _, value in nodes(connection) do
 			local object = json.asObject(value)
@@ -169,8 +173,10 @@ local function fetchAuthored(repositories: { [string]: string }, run: types.Comm
 end
 
 -- Each gh call costs about a second, so jobs share a small pool of concurrent workers.
-local function runConcurrently(jobs: { () -> { PullRequest } }): { PullRequest }
+-- A job that raises contributes nothing and marks the result incomplete.
+local function runConcurrently(jobs: { () -> { PullRequest } }): ({ PullRequest }, boolean)
 	local results: { { PullRequest } } = {}
+	local complete = true
 	local nextJob = 1
 	local active = 0
 	local function work()
@@ -179,6 +185,7 @@ local function runConcurrently(jobs: { () -> { PullRequest } }): { PullRequest }
 			nextJob += 1
 			local ok, value = pcall(jobs[index])
 			results[index] = if ok then value else {}
+			complete = complete and ok
 		end
 		active -= 1
 	end
@@ -194,11 +201,12 @@ local function runConcurrently(jobs: { () -> { PullRequest } }): { PullRequest }
 	for _, batch in results do
 		table.move(batch, 1, #batch, #result + 1, result)
 	end
-	return result
+	return result, complete
 end
 
 -- PRs for the given worktrees' branches, plus the viewer's open PRs in the same repositories.
-local function listPullRequests(worktrees: { types.Worktree }, runner: types.CommandRunner?): { PullRequest }
+-- The second result is false when any GitHub query failed, so callers can avoid caching partial data.
+local function listPullRequests(worktrees: { types.Worktree }, runner: types.CommandRunner?): ({ PullRequest }, boolean)
 	local run = runner or defaultRun
 	local repositories: { [string]: string } = {}
 	local lookups: { Lookup } = {}
@@ -216,7 +224,7 @@ local function listPullRequests(worktrees: { types.Worktree }, runner: types.Com
 		end
 	end
 	if next(repositories) == nil then
-		return {}
+		return {}, true
 	end
 
 	local jobs: { () -> { PullRequest } } = {

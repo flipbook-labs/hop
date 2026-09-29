@@ -204,6 +204,54 @@ test.case("to refreshes a stale cache once before giving up", function(assert)
 	assert.eq(lastCommand(commands)[2], "/src/widgets-feature")
 end)
 
+test.case("to refreshes a cache whose matching worktree was removed", function(assert)
+	local removed: types.Worktree = {
+		path = path.parse("/nonexistent/hop-removed-worktree"),
+		branch = "gone",
+		repository = "example/widgets",
+		primary = false,
+	}
+	local stale = snapshot.build({ worktrees[1], removed }, {}, 0)
+	local dependencies, writes = toDependencies({}, {}, stale)
+	local ok, message = pcall(cli.execute, { "gone" }, dependencies)
+	assert.eq(ok, false)
+	assert.strContains(tostring(message), 'nothing matches "gone"')
+	assert.eq(#writes, 1)
+end)
+
+test.case("to still opens a worktree when the cache cannot be written", function(assert)
+	local commands: { { string } } = {}
+	local dependencies = toDependencies(commands, {})
+	dependencies.cache = {
+		read = function()
+			return nil
+		end,
+		write = function(_value: snapshot.Snapshot): ()
+			error("read-only file system")
+		end,
+	}
+	cli.execute({ "feature/hop" }, dependencies)
+	assert.eq(lastCommand(commands)[2], "/src/widgets-feature")
+end)
+
+test.case("a failed GitHub lookup does not replace the cache", function(assert)
+	local dependencies, writes = toDependencies({}, {})
+	dependencies.runner = function()
+		return { ok = false, exitCode = 1, stdout = "", stderr = "not authenticated" }
+	end
+	cli.execute({ "list", "--refresh" }, dependencies)
+	assert.eq(#writes, 0)
+end)
+
+test.case("list only abbreviates paths inside the home directory", function(assert)
+	local output: { string } = {}
+	local dependencies = toDependencies({}, output)
+	dependencies.homeDirectory = "/src/widgets"
+	cli.execute({ "list" }, dependencies)
+	assert.strContains(output[1], "\n    ~\n")
+	assert.strContains(output[1], "\n    /src/widgets-feature")
+end)
+
 test.case("to reports PRs that have no local worktree", function(assert)
 	local ok, message = pcall(cli.execute, { "#43" }, (toDependencies({}, {})))
 	assert.eq(ok, false)
