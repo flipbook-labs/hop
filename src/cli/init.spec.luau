@@ -119,7 +119,7 @@ local function memoryCache(initial: snapshot.Snapshot?): (cache.Cache, { snapsho
 end
 
 -- One response serves both the branch lookup and the viewer's open PRs.
-local pullRequestList = '{"data":{"branch2":{"defaultBranchRef":{"name":"main"},"pullRequests":{"nodes":['
+local pullRequestList = '{"data":{"branch2":{"defaultBranchRef":{"name":"main"},"openPullRequests":{"nodes":[]},"pullRequests":{"nodes":['
 	.. '{"number":42,"title":"Add the hop command","headRefName":"feature/hop","url":"https://github.com/example/widgets/pull/42","state":"OPEN","isDraft":false}]}},'
 	.. '"viewer":{"pullRequests":{"pageInfo":{"hasNextPage":false},"nodes":['
 	.. '{"number":43,"title":"Orphaned idea","headRefName":"elsewhere","url":"https://github.com/example/widgets/pull/43","state":"OPEN","isDraft":true,"repository":{"nameWithOwner":"example/widgets"}}]}}}}'

@@ -80,7 +80,7 @@ end
 
 -- Looks up PRs by each worktree's branch. Default branches are skipped because
 -- release and sync PRs often use them as their head.
-local function fetchBranches(batch: { Lookup }, run: types.CommandRunner): { PullRequest }
+local function fetchBranches(batch: { Lookup }, run: types.CommandRunner): ({ PullRequest }, boolean)
 	local declarations: { string } = {}
 	local selections: { string } = {}
 	local variables: { [string]: string } = {}
@@ -99,6 +99,7 @@ local function fetchBranches(batch: { Lookup }, run: types.CommandRunner): { Pul
 	end
 
 	local result: { PullRequest } = {}
+	local complete = true
 	local data = query(run, `query({table.concat(declarations, ", ")}) \{ {table.concat(selections, " ")} }`, variables)
 	if data == nil then
 		error("pull request lookup failed")
@@ -113,7 +114,12 @@ local function fetchBranches(batch: { Lookup }, run: types.CommandRunner): { Pul
 			continue
 		end
 		-- Open PRs are fetched separately so newer closed PRs on a reused branch cannot crowd them out.
-		for _, connection in { repository.openPullRequests, repository.pullRequests } do
+		-- A connection missing from a resolved repository means that part of the query failed.
+		for _, field in { "openPullRequests", "pullRequests" } do
+			local connection = json.asObject(repository[field])
+			if connection == nil then
+				complete = false
+			end
 			for _, value in nodes(connection) do
 				local pullRequest = parsePullRequest(value, lookup.repository)
 				if pullRequest then
@@ -122,7 +128,7 @@ local function fetchBranches(batch: { Lookup }, run: types.CommandRunner): { Pul
 			end
 		end
 	end
-	return result
+	return result, complete
 end
 
 -- The viewer's open PRs in known repositories, so in-flight work without a worktree still shows up.
@@ -173,8 +179,8 @@ local function fetchAuthored(repositories: { [string]: string }, run: types.Comm
 end
 
 -- Each gh call costs about a second, so jobs share a small pool of concurrent workers.
--- A job that raises contributes nothing and marks the result incomplete.
-local function runConcurrently(jobs: { () -> { PullRequest } }): ({ PullRequest }, boolean)
+-- A job that raises contributes nothing; it or a job reporting partial data marks the result incomplete.
+local function runConcurrently(jobs: { () -> ({ PullRequest }, boolean) }): ({ PullRequest }, boolean)
 	local results: { { PullRequest } } = {}
 	local complete = true
 	local nextJob = 1
@@ -183,9 +189,9 @@ local function runConcurrently(jobs: { () -> { PullRequest } }): ({ PullRequest 
 		while nextJob <= #jobs do
 			local index = nextJob
 			nextJob += 1
-			local ok, value = pcall(jobs[index])
+			local ok, value, jobComplete = pcall(jobs[index])
 			results[index] = if ok then value else {}
-			complete = complete and ok
+			complete = complete and ok and jobComplete
 		end
 		active -= 1
 	end
@@ -227,9 +233,9 @@ local function listPullRequests(worktrees: { types.Worktree }, runner: types.Com
 		return {}, true
 	end
 
-	local jobs: { () -> { PullRequest } } = {
+	local jobs: { () -> ({ PullRequest }, boolean) } = {
 		function()
-			return fetchAuthored(repositories, run)
+			return fetchAuthored(repositories, run), true
 		end,
 	}
 	for start = 1, #lookups, BATCH_SIZE do

@@ -164,6 +164,27 @@ test.case("GitHub finds an open pull request older than the latest closed ones",
 	assert.eq(pullRequests[1].number, 3)
 end)
 
+test.case("GitHub reports an incomplete lookup when a resolved repository omits a connection", function(assert)
+	local pullRequests, complete = github.listPullRequests(
+		{ worktree("example/widgets", "feature/hop") },
+		function(argv)
+			if isAuthoredQuery(argv) then
+				return result(true, '{"data":{"viewer":{"pullRequests":{"nodes":[]}}}}', "")
+			end
+			return result(
+				false,
+				`\{"data":\{"branch1":\{"openPullRequests":null,"pullRequests":\{"nodes":[{pullRequestJson(
+					2,
+					"feature/hop"
+				)}]}}}}`,
+				"Something went wrong"
+			)
+		end
+	)
+	assert.eq(#pullRequests, 1)
+	assert.eq(complete, false)
+end)
+
 test.case("GitHub reports an incomplete lookup when a query returns no data", function(assert)
 	local pullRequests, complete = github.listPullRequests({ worktree("example/widgets", "feature/hop") }, function()
 		return result(false, "", "not authenticated")
