@@ -1,4 +1,5 @@
-// Builds the hop CLI, bundles it into bin/, and packages a macOS arm64 VSIX.
+// Builds the hop CLI, bundles it into bin/, and packages a VSIX for the host platform, since the
+// bundled CLI is a native build for the machine that ran this script.
 import { execFileSync } from "node:child_process";
 import { chmodSync, copyFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -14,4 +15,5 @@ copyFileSync(join(repository, "build", "hop"), join(extension, "bin", "hop"));
 chmodSync(join(extension, "bin", "hop"), 0o755);
 
 run("npx", ["tsc", "-p", "."], extension);
-run("npx", ["vsce", "package", "--target", "darwin-arm64", "--no-dependencies", "--out", "hop.vsix"], extension);
+const target = `${process.platform}-${process.arch}`;
+run("npx", ["vsce", "package", "--target", target, "--no-dependencies", "--out", "hop.vsix"], extension);

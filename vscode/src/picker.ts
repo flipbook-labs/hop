@@ -72,23 +72,38 @@ export function pick(source: PickerSource): Promise<Target | undefined> {
 			void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 		}
 	};
+	let refreshed = false;
+	let refreshing = 0;
 	const refresh = () => {
+		refreshing += 1;
 		picker.busy = true;
 		return source
 			.refresh()
-			.then(show, fail)
+			.then((list) => {
+				refreshed = true;
+				show(list);
+			}, fail)
 			.finally(() => {
-				picker.busy = false;
+				refreshing -= 1;
+				picker.busy = refreshing > 0;
 			});
 	};
 
-	source.cached().then((list) => {
-		show(list);
-		if (Date.now() / 1000 - list.generatedAt > STALE_SECONDS) {
-			return refresh();
-		}
-		picker.busy = false;
-	}, fail);
+	source
+		.cached()
+		.then((list) => {
+			// A refresh that finished first already has newer results.
+			if (refreshed) {
+				return;
+			}
+			show(list);
+			if (Date.now() / 1000 - list.generatedAt > STALE_SECONDS) {
+				return refresh();
+			}
+		}, fail)
+		.finally(() => {
+			picker.busy = refreshing > 0;
+		});
 
 	return new Promise((resolve) => {
 		picker.onDidTriggerButton(() => void refresh());
