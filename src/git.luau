@@ -183,7 +183,8 @@ local function gitDirectory(worktree: types.Worktree): path.Path?
 end
 
 -- Seconds since the epoch that the worktree's index last changed, or 0 when unknown.
--- Git rewrites the index on checkout, commit, and status refreshes, so it tracks recent use.
+-- Git rewrites the index on checkout, commit, and status refreshes, so it approximates recent work.
+-- Merely opening a worktree does not update it.
 local function lastActivity(worktree: types.Worktree): number
 	local directory = gitDirectory(worktree)
 	if directory == nil then
