@@ -74,13 +74,14 @@ local function pullRequestJson(pullRequest: types.PullRequest): json.Object
 		branch = pullRequest.branch,
 		state = pullRequest.state,
 		draft = pullRequest.draft,
+		author = pullRequest.author,
 	}
 end
 
 -- `activity` adds each worktree's last use, which changes too often to cache.
-local function toJson(snapshot: Snapshot, activity: ((types.Worktree) -> number)?): json.Object
+local function entriesToJson(entries: { Entry }, activity: ((types.Worktree) -> number)?): json.Array
 	local worktrees: json.Array = {}
-	for _, entry in snapshot.entries do
+	for _, entry in entries do
 		local worktree = entry.worktree
 		local repository: json.Object = {
 			name = repositoryName(worktree),
@@ -100,13 +101,17 @@ local function toJson(snapshot: Snapshot, activity: ((types.Worktree) -> number)
 		}
 		table.insert(worktrees, item)
 	end
+	return worktrees
+end
+
+local function toJson(snapshot: Snapshot, activity: ((types.Worktree) -> number)?): json.Object
 	local pullRequests: json.Array = {}
 	for _, pullRequest in snapshot.pullRequests do
 		table.insert(pullRequests, pullRequestJson(pullRequest))
 	end
 	return {
 		generatedAt = snapshot.generatedAt,
-		worktrees = worktrees,
+		worktrees = entriesToJson(snapshot.entries, activity),
 		pullRequests = pullRequests,
 	}
 end
@@ -141,22 +146,16 @@ local function pullRequestFromJson(value: json.Value): types.PullRequest?
 		title = optionalString(object.title),
 		state = optionalString(object.state),
 		draft = if type(draft) == "boolean" then draft else nil,
+		author = optionalString(object.author),
 	}
 end
 
--- Returns nil for anything that is not a snapshot this version of Hop wrote.
-local function fromJson(value: json.Value): Snapshot?
-	local object = json.asObject(value)
-	if object == nil then
+-- Returns nil unless every item is a worktree this version of Hop wrote.
+local function entriesFromJson(value: json.Value): { Entry }?
+	local worktrees = json.asArray(value)
+	if worktrees == nil then
 		return nil
 	end
-	local generatedAt = object.generatedAt
-	local worktrees = json.asArray(object.worktrees)
-	local pullRequests = json.asArray(object.pullRequests)
-	if type(generatedAt) ~= "number" or worktrees == nil or pullRequests == nil then
-		return nil
-	end
-
 	local entries: { Entry } = {}
 	for _, item in worktrees do
 		local worktreeObject = json.asObject(item)
@@ -178,6 +177,21 @@ local function fromJson(value: json.Value): Snapshot?
 			pullRequest = pullRequestFromJson(worktreeObject.pr),
 		})
 	end
+	return entries
+end
+
+-- Returns nil for anything that is not a snapshot this version of Hop wrote.
+local function fromJson(value: json.Value): Snapshot?
+	local object = json.asObject(value)
+	if object == nil then
+		return nil
+	end
+	local generatedAt = object.generatedAt
+	local entries = entriesFromJson(object.worktrees)
+	local pullRequests = json.asArray(object.pullRequests)
+	if type(generatedAt) ~= "number" or entries == nil or pullRequests == nil then
+		return nil
+	end
 
 	local unmatched: { types.PullRequest } = {}
 	for _, item in pullRequests do
@@ -191,6 +205,8 @@ end
 
 return table.freeze({
 	build = build,
+	entriesFromJson = entriesFromJson,
+	entriesToJson = entriesToJson,
 	fromJson = fromJson,
 	isDefaultBranch = isDefaultBranch,
 	repositoryName = repositoryName,

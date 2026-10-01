@@ -1,0 +1,35 @@
+[
+	{
+		"input": "https://github.com/Roblox/foundation/pull/2186",
+		"reference": { "repository": "Roblox/foundation", "number": 2186 }
+	},
+	{
+		"input": " https://github.com/Roblox/foundation/pull/2186/files ",
+		"reference": { "repository": "Roblox/foundation", "number": 2186 }
+	},
+	{
+		"input": "https://github.com/flipbook-labs/hop/pull/9#discussion_r1",
+		"reference": { "repository": "flipbook-labs/hop", "number": 9 }
+	},
+	{
+		"input": "http://github.com/flipbook-labs/hop/pull/9?w=1",
+		"reference": { "repository": "flipbook-labs/hop", "number": 9 }
+	},
+	{
+		"input": "Roblox/foundation#2186",
+		"reference": { "repository": "Roblox/foundation", "number": 2186 }
+	},
+	{
+		"input": "foundation#2186",
+		"reference": { "repositoryName": "foundation", "number": 2186 }
+	},
+	{
+		"input": "#2186",
+		"reference": { "number": 2186 }
+	},
+	{ "input": "2186" },
+	{ "input": "foundation 2186" },
+	{ "input": "foundation fonts" },
+	{ "input": "feat/new-story-api" },
+	{ "input": "https://github.com/Roblox/foundation" }
+]

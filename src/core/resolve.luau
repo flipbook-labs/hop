@@ -35,7 +35,7 @@ local function parse(value: string): Expression
 	if repositoryName and nameNumber then
 		return { kind = "pullRequest", number = assert(tonumber(nameNumber)), repositoryName = repositoryName }
 	end
-	local bare = trimmed:match("^#?(%d+)$")
+	local bare = trimmed:match("^#(%d+)$")
 	if bare then
 		return { kind = "pullRequest", number = assert(tonumber(bare)) }
 	end
@@ -91,8 +91,16 @@ local function words(text: string): { string }
 	return result
 end
 
+-- A PR matches on its title or on `repo#123`, so a bare number finds it the way PRs are usually written.
 local function titleMatches(pullRequest: types.PullRequest?, word: string): boolean
-	return pullRequest ~= nil and pullRequest.title ~= nil and pullRequest.title:lower():find(word, 1, true) ~= nil
+	if pullRequest == nil then
+		return false
+	elseif pullRequest.title and pullRequest.title:lower():find(word, 1, true) then
+		return true
+	end
+	local name = pullRequest.repository:match("/(.+)$") or pullRequest.repository
+	local reference = `{name}#{pullRequest.number}`
+	return reference:lower():find(word, 1, true) ~= nil
 end
 
 local function entryMatches(entry: snapshot.Entry, word: string): boolean
@@ -199,29 +207,56 @@ export type CheckoutTarget = {
 	number: number,
 }
 
--- The single PR a worktree-less PR expression names, so Hop can check it out. `owner/repo#N` and
--- URLs name one outright; otherwise the PR must be the only match among known PRs or known repositories.
-local function checkoutTarget(value: snapshot.Snapshot, expression: Expression, resolution: Resolution): CheckoutTarget?
-	if expression.kind ~= "pullRequest" or #resolution.entries > 0 then
+-- The PR a reference names when neither your worktrees nor your open PRs have it. `owner/repo#N` and
+-- URLs name one outright; `repo#N` must name exactly one repository among your clones and others' work.
+local function checkoutTarget(
+	value: snapshot.Snapshot,
+	expression: Expression,
+	others: { snapshot.Entry }?
+): CheckoutTarget?
+	if expression.kind ~= "pullRequest" then
 		return nil
 	elseif expression.repository then
 		return { repository = expression.repository, number = expression.number }
-	elseif #resolution.pullRequests == 1 then
-		return { repository = resolution.pullRequests[1].repository, number = expression.number }
-	elseif #resolution.pullRequests > 1 or expression.repositoryName == nil then
+	elseif expression.repositoryName == nil then
 		return nil
 	end
 	local found: string? = nil
-	for _, entry in value.entries do
-		local repository = entry.worktree.repository
-		if repository and repositoryMatches(expression, repository) then
-			if found and found:lower() ~= repository:lower() then
-				return nil
+	for _, entries in { value.entries, others or {} } do
+		for _, entry in entries do
+			local repository = entry.worktree.repository
+			if repository and repositoryMatches(expression, repository) then
+				if found and found:lower() ~= repository:lower() then
+					return nil
+				end
+				found = repository
 			end
-			found = repository
 		end
 	end
 	return if found then { repository = found, number = expression.number } else nil
+end
+
+-- Others' work is reached only by PR reference, never by search words. Fork PRs are checked out as
+-- `pr-<number>`, which also identifies them when their recorded PR is missing.
+local function resolveOthers(entries: { snapshot.Entry }, expression: Expression): { snapshot.Entry }
+	local result: { snapshot.Entry } = {}
+	if expression.kind ~= "pullRequest" then
+		return result
+	end
+	for _, entry in entries do
+		local pullRequest = entry.pullRequest
+		local repository = entry.worktree.repository
+		local matched = if pullRequest
+			then pullRequest.number == expression.number and repositoryMatches(expression, pullRequest.repository)
+			else entry.worktree.branch == `pr-{expression.number}` and repository ~= nil and repositoryMatches(
+				expression,
+				repository
+			)
+		if matched then
+			table.insert(result, entry)
+		end
+	end
+	return result
 end
 
 local function noActivity(_worktree: types.Worktree): number
@@ -239,4 +274,5 @@ return table.freeze({
 	checkoutTarget = checkoutTarget,
 	parse = parse,
 	resolve = resolve,
+	resolveOthers = resolveOthers,
 })

@@ -1,4 +1,4 @@
-import type { HopList, HopPullRequest, HopWorktree } from "./hop";
+import { allWorktrees, type HopList, type HopPullRequest, type HopWorktree } from "./hop";
 
 // Plain Quick Pick item data, kept free of the vscode module so it can be unit tested.
 export type Target =
@@ -102,7 +102,7 @@ function isForkCheckout(worktree: HopWorktree, reference: PullRequestReference):
 }
 
 // For a PR Hop does not know about. Mirrors `hop to`: a full reference names its repository;
-// otherwise the repository name must match exactly one known repository.
+// otherwise the repository name must match exactly one of your clones or others' work.
 function checkoutTarget(list: HopList, reference: PullRequestReference): Target | undefined {
 	if (reference.repository) {
 		return { kind: "checkout", repository: reference.repository, number: reference.number };
@@ -111,7 +111,7 @@ function checkoutTarget(list: HopList, reference: PullRequestReference): Target 
 		return undefined;
 	}
 	const repositories = new Map<string, string>();
-	for (const worktree of list.worktrees) {
+	for (const worktree of allWorktrees(list)) {
 		const remote = worktree.repository.remote;
 		if (remote && repositoryMatches(reference, remote)) {
 			repositories.set(remote.toLowerCase(), remote);
@@ -124,20 +124,23 @@ function checkoutTarget(list: HopList, reference: PullRequestReference): Target 
 export function checkoutItem(target: Target & { kind: "checkout" }): Item {
 	return {
 		label: `$(git-pull-request-create) Check out ${target.repository}#${target.number}`,
-		detail: "Create a local worktree for this pull request",
+		detail: "Find a worktree of yours on this pull request, or check it out under ~/.hop/cache",
 		target,
 	};
 }
 
+function matchesReference(worktree: HopWorktree, reference: PullRequestReference): boolean {
+	return referenceMatches(reference, worktree.pr) || isForkCheckout(worktree, reference);
+}
+
+// Your worktrees, then your PRs without one, then others' work Hop already checked out, then a checkout row.
 function pullRequestReferenceItems(
 	list: HopList,
 	reference: PullRequestReference,
 	home: string,
 	currentPath: string | undefined,
 ): Item[] {
-	const worktrees = list.worktrees.filter(
-		(worktree) => referenceMatches(reference, worktree.pr) || isForkCheckout(worktree, reference),
-	);
+	const worktrees = list.worktrees.filter((worktree) => matchesReference(worktree, reference));
 	if (worktrees.length > 0) {
 		return worktrees.map((worktree) => worktreeItem(worktree, home, worktree.path === currentPath));
 	}
@@ -145,6 +148,10 @@ function pullRequestReferenceItems(
 	const pullRequests = list.pullRequests.filter((pullRequest) => referenceMatches(reference, pullRequest));
 	if (pullRequests.length > 0) {
 		return [{ label: "Pull requests without a worktree", separator: true }, ...pullRequests.map(pullRequestItem)];
+	}
+	const others = (list.others ?? []).filter((worktree) => matchesReference(worktree, reference));
+	if (others.length > 0) {
+		return others.map((worktree) => otherItem(worktree, home, worktree.path === currentPath));
 	}
 	const target = checkoutTarget(list, reference);
 	return target?.kind === "checkout" ? [checkoutItem(target)] : [];
@@ -158,6 +165,16 @@ export function worktreeItem(worktree: HopWorktree, home: string, current: boole
 		description: current ? `${worktree.repository.name} · current` : worktree.repository.name,
 		detail: `${summary} · ${tilde(worktree.path, home)}`,
 		target: { kind: "worktree", worktree },
+	};
+}
+
+export function otherItem(worktree: HopWorktree, home: string, current: boolean): Item {
+	const author = worktree.pr?.author ? `@${worktree.pr.author}` : "someone else's PR";
+	const item = worktreeItem(worktree, home, current);
+	return {
+		...item,
+		label: `$(account) ${worktree.branch ?? "detached"}`,
+		description: `${worktree.repository.name} · ${author}${current ? " · current" : ""}`,
 	};
 }
 
