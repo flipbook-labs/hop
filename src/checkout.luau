@@ -97,7 +97,7 @@ local function pullRequest(
 		path = tostring(destination),
 		number = details.number,
 		branch = branch,
-		crossRepository = crossRepository,
+		fromPullRef = crossRepository,
 	}, runner)
 
 	local entry: snapshot.Entry = {
@@ -148,7 +148,9 @@ end
 
 -- Opens a PR that neither the cache nor others' work knows. A worktree of yours already on its branch
 -- is yours; otherwise the PR is someone else's and is checked out under ~/.hop/cache, linked to your
--- clone when you have one and to a fresh clone in ~/.hop/cache/repos when you do not.
+-- clone when you have one and to a fresh clone in ~/.hop/cache/repos when you do not. Others' PRs are
+-- always fetched from `refs/pull/<number>/head` into `pr-<number>`, so PRs sharing a head branch never
+-- compete for one local branch.
 local function reference(
 	value: snapshot.Snapshot,
 	target: resolve.CheckoutTarget,
@@ -183,19 +185,20 @@ local function reference(
 	if fs.exists(destination) then
 		error(`{destination} already exists but Hop has no record of it; remove it and try again`, 0)
 	end
+	local otherBranch = `pr-{details.number}`
 	git.addPullRequestWorktree({
 		primary = root,
 		path = tostring(destination),
 		number = details.number,
-		branch = branch,
-		crossRepository = crossRepository,
+		branch = otherBranch,
+		fromPullRef = true,
 	}, options.runner)
 
 	return {
 		entry = {
 			worktree = {
 				path = destination,
-				branch = branch,
+				branch = otherBranch,
 				repository = repository,
 				root = root,
 				head = nil,

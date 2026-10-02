@@ -446,8 +446,8 @@ local function openCheckout(deps: Resolved, entry: snapshot.Entry, created: bool
 	editor.open(worktreePath, deps.runner, deps.homeDirectory)
 end
 
--- Your worktrees and open PRs come first, then others' work Hop already checked out. A reference that
--- names its repository is then looked up directly; anything else refreshes the cache once instead.
+-- Your worktrees and open PRs come first, then others' work Hop already checked out. Anything else
+-- refreshes a cached snapshot once before checking out a PR or giving up.
 local function to(deps: Resolved, args: { string })
 	local text = table.concat(args, " ")
 	assert(text:match("%S"), "usage: hop to <expr>")
@@ -456,17 +456,21 @@ local function to(deps: Resolved, args: { string })
 	local resolution = resolve.resolve(value, expression, deps.activity)
 	local otherEntries = deps.others.read()
 	local target: resolve.CheckoutTarget? = nil
-	if #resolution.entries == 0 and #resolution.pullRequests == 0 then
-		local visited = resolve.resolveOthers(otherEntries, expression)
-		if #visited > 0 then
-			openChoice(deps, visited)
-			return
+	if #resolution.entries == 0 then
+		if #resolution.pullRequests == 0 then
+			local visited = resolve.resolveOthers(otherEntries, expression)
+			if #visited > 0 then
+				openChoice(deps, visited)
+				return
+			end
 		end
-		target = resolve.checkoutTarget(value, expression, otherEntries)
-		if target == nil and cached then
-			-- The worktree may be newer than the cache, such as one an agent just created.
+		if cached then
+			-- The cache may predate a worktree an agent just created or one of your new PRs. Checking out
+			-- from it could add a branch that is already checked out or file your PR as someone else's.
 			value = loadSnapshot(deps, true, true)
 			resolution = resolve.resolve(value, expression, deps.activity)
+		end
+		if #resolution.entries == 0 and #resolution.pullRequests == 0 then
 			target = resolve.checkoutTarget(value, expression, otherEntries)
 		end
 	end
@@ -501,8 +505,15 @@ local function to(deps: Resolved, args: { string })
 		end,
 	})
 	if result.other then
-		table.insert(otherEntries, result.entry)
-		deps.others.write(otherEntries)
+		-- Read again so a checkout another Hop process finished meanwhile keeps its record.
+		local latest = deps.others.read()
+		for index = #latest, 1, -1 do
+			if tostring(latest[index].worktree.path) == tostring(result.entry.worktree.path) then
+				table.remove(latest, index)
+			end
+		end
+		table.insert(latest, result.entry)
+		deps.others.write(latest)
 	else
 		deps.cache.write(value)
 	end
