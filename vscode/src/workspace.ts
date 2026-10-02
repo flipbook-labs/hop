@@ -13,14 +13,19 @@ export function isShell(): boolean {
 	return vscode.workspace.workspaceFile?.fsPath === SHELL_FILE;
 }
 
+// Only a single-folder window or the old shell has one worktree in use. Other multi-root workspaces
+// have none, so Hop neither labels them with a worktree nor treats one as the current checkout.
 export function activePath(): string | undefined {
 	const folders = vscode.workspace.workspaceFolders ?? [];
-	return (isShell() ? folders[1] : folders[0])?.uri.fsPath;
+	if (isShell()) {
+		return folders[1]?.uri.fsPath;
+	}
+	return vscode.workspace.workspaceFile === undefined && folders.length === 1 ? folders[0].uri.fsPath : undefined;
 }
 
 export async function switchTo(target: Target): Promise<void> {
-	const folders = vscode.workspace.workspaceFolders ?? [];
-	if (vscode.workspace.workspaceFile === undefined && folders.length === 1 && folders[0].uri.fsPath === target.path) {
+	// The old shell reopens even on the same worktree to migrate to a single-folder window.
+	if (!isShell() && activePath() === target.path) {
 		return;
 	}
 
