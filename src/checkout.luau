@@ -61,6 +61,8 @@ local function pullRequest(
 	local details, crossRepository = github.viewPullRequest(repository, target.number, runner)
 	local branch = localBranch(details, crossRepository)
 
+	-- A same-repository PR's head is its branch, so a worktree on that branch already holds this PR's code
+	-- even when the cache links it to another open PR from the same branch. Fork PRs use `pr-<number>`.
 	for _, entry in value.entries do
 		if entry.worktree.branch == branch and sameRepository(entry.worktree.repository, repository) then
 			entry.pullRequest = entry.pullRequest or details
