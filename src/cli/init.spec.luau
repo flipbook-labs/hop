@@ -185,7 +185,7 @@ local function toDependencies(
 			elseif argv[1] == "gh" then
 				return { ok = true, exitCode = 0, stdout = pullRequestList, stderr = "" }
 			elseif argv[1] == "git" and argv[4] == "show-ref" then
-				local exists = argv[#argv] == "refs/heads/existing"
+				local exists = argv[#argv] == "refs/heads/pr-10"
 				return { ok = exists, exitCode = if exists then 0 else 1, stdout = "", stderr = "" }
 			end
 			return { ok = true, exitCode = 0, stdout = "", stderr = "" }
@@ -323,9 +323,9 @@ test.case("to checks out someone else's PR URL under the cache, linked to your c
 	local destination = `{SILO}/worktrees/example/widgets-pr-7`
 	local gitCommands = commandsFrom(commands, "git")
 	assert.eq(gitCommands[1], "git -C /src/widgets worktree list --porcelain")
-	assert.eq(gitCommands[2], "git -C /src/widgets fetch origin +refs/heads/fix/thing:refs/remotes/origin/fix/thing")
-	assert.eq(gitCommands[3], "git -C /src/widgets show-ref --verify --quiet refs/heads/fix/thing")
-	assert.eq(gitCommands[4], `git -C /src/widgets worktree add --track -b fix/thing {destination} origin/fix/thing`)
+	assert.eq(gitCommands[2], "git -C /src/widgets fetch origin refs/pull/7/head")
+	assert.eq(gitCommands[3], "git -C /src/widgets show-ref --verify --quiet refs/heads/pr-7")
+	assert.eq(gitCommands[4], `git -C /src/widgets worktree add -b pr-7 {destination} FETCH_HEAD`)
 	assert.eq(table.concat(lastCommand(commands), " "), `code {destination}`)
 	assert.strContains(output[1], `Checked out Example/Widgets#7 in {destination}`)
 
@@ -400,8 +400,8 @@ test.case("to fast-forwards and reuses an existing local branch for a PR checkou
 	local commands: { { string } } = {}
 	cli.execute({ "widgets#10" }, (toDependencies(commands, {})))
 	local gitCommands = commandsFrom(commands, "git")
-	assert.eq(gitCommands[4], "git -C /src/widgets fetch origin refs/heads/existing:refs/heads/existing")
-	assert.eq(gitCommands[5], `git -C /src/widgets worktree add {SILO}/worktrees/example/widgets-pr-10 existing`)
+	assert.eq(gitCommands[4], "git -C /src/widgets fetch origin refs/pull/10/head:refs/heads/pr-10")
+	assert.eq(gitCommands[5], `git -C /src/widgets worktree add {SILO}/worktrees/example/widgets-pr-10 pr-10`)
 end)
 
 test.case(
@@ -457,6 +457,65 @@ test.case("to checks out the viewer's PR that has no worktree and drops it from 
 	assert.eq(#writes[#writes].pullRequests, 0)
 end)
 
+test.case("to refreshes the cache before filing your new PR as someone else's", function(assert)
+	local commands: { { string } } = {}
+	local store, stored = memoryOthers()
+	cli.execute({ "example/widgets#43" }, (toDependencies(commands, {}, snapshot.build(worktrees, {}, 0), store)))
+	assert.eq(lastCommand(commands)[2], "/src/widgets-pr-43")
+	assert.eq(#stored, 0)
+end)
+
+test.case("to refreshes a cached PR that has since gained a worktree instead of adding another", function(assert)
+	local commands: { { string } } = {}
+	local orphan: types.PullRequest = {
+		number = 43,
+		url = "https://github.com/example/widgets/pull/43",
+		branch = "elsewhere",
+		repository = "example/widgets",
+		state = "OPEN",
+	}
+	local dependencies = toDependencies(commands, {}, snapshot.build(worktrees, { orphan }, 0))
+	dependencies.loadWorktrees = function()
+		local all = table.clone(worktrees)
+		table.insert(all, {
+			path = path.parse("/src/widgets-elsewhere"),
+			branch = "elsewhere",
+			repository = "example/widgets",
+			primary = false,
+		})
+		return all
+	end
+	cli.execute({ "#43" }, dependencies)
+	assert.eq(lastCommand(commands)[2], "/src/widgets-elsewhere")
+	assert.eq(#commandsFrom(commands, "git"), 0)
+end)
+
+test.case("to keeps records another Hop process wrote during a checkout", function(assert)
+	local commands: { { string } } = {}
+	local store, stored = memoryOthers()
+	local read = store.read
+	local reads = 0
+	store.read = function()
+		reads += 1
+		if reads == 2 then
+			table.insert(stored, {
+				worktree = {
+					path = path.parse(`{SILO}/worktrees/example/widgets-pr-9`),
+					branch = "pr-9",
+					repository = "example/widgets",
+					primary = false,
+				},
+				pullRequest = nil,
+			})
+		end
+		return read()
+	end
+	cli.execute({ "example/widgets#7" }, (toDependencies(commands, {}, nil, store)))
+	assert.eq(#stored, 2)
+	assert.eq(tostring(stored[1].worktree.path), `{SILO}/worktrees/example/widgets-pr-9`)
+	assert.eq(tostring(stored[2].worktree.path), `{SILO}/worktrees/example/widgets-pr-7`)
+end)
+
 test.case("to clones a repository you do not have into the cache", function(assert)
 	local commands: { { string } } = {}
 	local store, stored = memoryOthers()
@@ -465,7 +524,7 @@ test.case("to clones a repository you do not have into the cache", function(asse
 	local ghCommands = commandsFrom(commands, "gh")
 	assert.eq(ghCommands[#ghCommands], `gh repo clone other/thing {clone} -- --filter=blob:none`)
 	local gitCommands = commandsFrom(commands, "git")
-	assert.eq(gitCommands[1], `git -C {clone} fetch origin +refs/heads/thing/fix:refs/remotes/origin/thing/fix`)
+	assert.eq(gitCommands[1], `git -C {clone} fetch origin refs/pull/5/head`)
 	assert.eq(lastCommand(commands)[2], `{SILO}/worktrees/other/thing-pr-5`)
 	assert.eq(stored[1].worktree.root, clone)
 end)

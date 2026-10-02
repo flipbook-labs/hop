@@ -76,6 +76,7 @@ export function parsePullRequestReference(query: string): PullRequestReference |
 	return bare ? { number: Number(bare[1]) } : undefined;
 }
 
+// A bare `#N` intentionally matches every known repository, like `hop to #N`; each row names its repository.
 function repositoryMatches(reference: PullRequestReference, repository: string): boolean {
 	const normalized = repository.toLowerCase();
 	if (reference.repository) {

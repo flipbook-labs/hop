@@ -199,7 +199,8 @@ export type PullRequestCheckout = {
 	path: string,
 	number: number,
 	branch: string,
-	crossRepository: boolean,
+	-- Fetch the head from `refs/pull/<number>/head` instead of tracking `origin/<branch>`.
+	fromPullRef: boolean,
 }
 
 local function mustRun(runner: types.CommandRunner, argv: { string })
@@ -212,8 +213,9 @@ local function mustRun(runner: types.CommandRunner, argv: { string })
 end
 
 -- Adds a linked worktree at `checkout.path` for a PR's head, reusing the local branch when it exists.
--- Same-repository PRs track `origin/<branch>`. Fork PRs have no remote branch in `origin`, so their
--- head is fetched from `refs/pull/<number>/head` into a local branch without an upstream.
+-- Same-repository PRs track `origin/<branch>`. Fork PRs have no remote branch in `origin`, and others'
+-- PRs get a PR-named branch, so their head is fetched from `refs/pull/<number>/head` into a local branch
+-- without an upstream.
 local function addPullRequestWorktree(checkout: PullRequestCheckout, runner: types.CommandRunner?)
 	local run = runner or defaultRun
 	local git = { "git", "-C", checkout.primary }
@@ -226,8 +228,8 @@ local function addPullRequestWorktree(checkout: PullRequestCheckout, runner: typ
 	end
 
 	local branch = checkout.branch
-	local source = if checkout.crossRepository then `refs/pull/{checkout.number}/head` else `refs/heads/{branch}`
-	if checkout.crossRepository then
+	local source = if checkout.fromPullRef then `refs/pull/{checkout.number}/head` else `refs/heads/{branch}`
+	if checkout.fromPullRef then
 		mustRun(run, command("fetch", "origin", source))
 	else
 		mustRun(run, command("fetch", "origin", `+{source}:refs/remotes/origin/{branch}`))
@@ -237,7 +239,7 @@ local function addPullRequestWorktree(checkout: PullRequestCheckout, runner: typ
 		-- Without `+`, Git only fast-forwards, so a local branch with its own commits is left alone.
 		commandOutput(run, command("fetch", "origin", `{source}:refs/heads/{branch}`))
 		mustRun(run, command("worktree", "add", checkout.path, branch))
-	elseif checkout.crossRepository then
+	elseif checkout.fromPullRef then
 		mustRun(run, command("worktree", "add", "-b", branch, checkout.path, "FETCH_HEAD"))
 	else
 		mustRun(run, command("worktree", "add", "--track", "-b", branch, checkout.path, `origin/{branch}`))
