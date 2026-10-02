@@ -49,6 +49,8 @@ test.case("discovery skips excluded and over-depth repositories but includes lin
 	assert.eq(tostring(linkedWorktree.path), tostring(linked))
 	assert.eq(linkedWorktree.branch, "feature/hop")
 	assert.eq(linkedWorktree.repository, "example/widgets")
+	assert.eq(linkedWorktree.head, "def")
+	assert.eq(linkedWorktree.root, tostring(primary))
 	assert.eq(primaryWorktree.primary, true)
 end)
 

@@ -59,13 +59,18 @@ local function parseWorktreeList(contents: string, repository: string?, primaryP
 				path = path.parse(worktreePath),
 				branch = nil,
 				repository = repository,
+				root = primaryPath,
+				head = nil,
 				primary = worktreePath == primaryPath,
 			}
 			current = created
 		elseif current then
 			local branch = line:match("^branch refs/heads/(.+)$")
+			local head = line:match("^HEAD (%x+)$")
 			if branch then
 				current.branch = branch
+			elseif head then
+				current.head = head
 			end
 		end
 	end
