@@ -1,7 +1,7 @@
 return {
 	package = {
 		name = "hop",
-		version = "0.0.0",
+		version = "0.1.0",
 		dependencies = {
 			["lute"] = {
 				rev = "v1.0.1-nightly.20260924",
