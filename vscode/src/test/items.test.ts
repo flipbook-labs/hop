@@ -2,7 +2,7 @@ import * as assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { HopList } from "../hop";
-import { buildItems, recordRecent } from "../items";
+import { buildItems, parsePullRequestReference, recordRecent } from "../items";
 
 const list: HopList = {
 	generatedAt: 0,
@@ -169,6 +169,65 @@ test("searching matches PR references and titles, and filters orphaned PRs", () 
 	assert.equal(items.length, 2);
 	assert.ok(items[0].separator);
 	assert.equal(items[1].target?.kind, "pullRequest");
+});
+
+test("parsePullRequestReference accepts URLs and #-references but not bare numbers", () => {
+	assert.deepEqual(parsePullRequestReference(" https://github.com/Roblox/foundation/pull/2186/files "), {
+		repository: "Roblox/foundation",
+		number: 2186,
+	});
+	assert.deepEqual(parsePullRequestReference("Roblox/foundation#2186"), {
+		repository: "Roblox/foundation",
+		number: 2186,
+	});
+	assert.deepEqual(parsePullRequestReference("foundation#2186"), { repositoryName: "foundation", number: 2186 });
+	assert.deepEqual(parsePullRequestReference("#2186"), { number: 2186 });
+	assert.equal(parsePullRequestReference("2186"), undefined);
+	assert.equal(parsePullRequestReference("foundation fonts"), undefined);
+});
+
+function kinds(query: string): (string | undefined)[] {
+	return buildItems(list, [], undefined, "/home/me", query).map((item) => item.target?.kind);
+}
+
+test("a pasted PR URL lists its worktree", () => {
+	const items = buildItems(list, [], undefined, "/home/me", "https://github.com/flipbook-labs/flipbook/pull/482");
+	assert.equal(items.length, 1);
+	const target = items[0].target;
+	assert.equal(target?.kind === "worktree" && target.worktree.path, "/home/me/git/flipbook-story-api");
+});
+
+test("a pasted PR URL without a worktree offers to check it out", () => {
+	const items = buildItems(list, [], undefined, "/home/me", "https://github.com/Roblox/foundation/pull/2186");
+	assert.equal(items.length, 1);
+	assert.equal(items[0].label, "$(git-pull-request-create) Check out Roblox/foundation#2186");
+	assert.deepEqual(items[0].target, { kind: "checkout", repository: "Roblox/foundation", number: 2186 });
+});
+
+test("a pasted fork PR URL lists its pr-<number> worktree", () => {
+	const forks: HopList = {
+		...list,
+		worktrees: [
+			...list.worktrees,
+			{
+				repository: { name: "flipbook", remote: "flipbook-labs/flipbook" },
+				path: "/home/me/git/flipbook-pr-558",
+				branch: "pr-558",
+				primary: false,
+			},
+		],
+	};
+	const items = buildItems(forks, [], undefined, "/home/me", "https://github.com/flipbook-labs/flipbook/pull/558");
+	assert.equal(items.length, 1);
+	const target = items[0].target;
+	assert.equal(target?.kind === "worktree" && target.worktree.path, "/home/me/git/flipbook-pr-558");
+});
+
+test("short PR references offer a checkout only when they name one repository", () => {
+	assert.deepEqual(kinds("#491"), [undefined, "pullRequest"]);
+	assert.deepEqual(kinds("hop#7"), ["checkout"]);
+	assert.deepEqual(kinds("#7"), []);
+	assert.deepEqual(kinds("missing#7"), []);
 });
 
 test("only paths inside the home directory are shortened", () => {

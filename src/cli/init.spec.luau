@@ -124,6 +124,27 @@ local pullRequestList = '{"data":{"branch2":{"defaultBranchRef":{"name":"main"},
 	.. '"viewer":{"pullRequests":{"pageInfo":{"hasNextPage":false},"nodes":['
 	.. '{"number":43,"title":"Orphaned idea","headRefName":"elsewhere","url":"https://github.com/example/widgets/pull/43","state":"OPEN","isDraft":true,"repository":{"nameWithOwner":"example/widgets"}}]}}}}'
 
+local function pullRequestView(number: number, branch: string, crossRepository: boolean): string
+	return json.serialize({
+		number = number,
+		title = `Change {number}`,
+		url = `https://github.com/example/widgets/pull/{number}`,
+		headRefName = branch,
+		state = "OPEN",
+		isDraft = false,
+		isCrossRepository = crossRepository,
+	})
+end
+
+-- `gh pr view` responses by PR number.
+local pullRequestViews: { [string]: string } = {
+	["7"] = pullRequestView(7, "fix/thing", false),
+	["8"] = pullRequestView(8, "main", true),
+	["9"] = pullRequestView(9, "feature/hop", false),
+	["10"] = pullRequestView(10, "existing", false),
+	["43"] = pullRequestView(43, "elsewhere", false),
+}
+
 local function toDependencies(
 	commands: { { string } },
 	output: { string },
@@ -139,8 +160,13 @@ local function toDependencies(
 		end,
 		runner = function(argv)
 			table.insert(commands, argv)
-			if argv[1] == "gh" then
+			if argv[1] == "gh" and argv[2] == "pr" then
+				return { ok = true, exitCode = 0, stdout = pullRequestViews[argv[4]] or "", stderr = "" }
+			elseif argv[1] == "gh" then
 				return { ok = true, exitCode = 0, stdout = pullRequestList, stderr = "" }
+			elseif argv[1] == "git" and argv[4] == "show-ref" then
+				local exists = argv[#argv] == "refs/heads/existing"
+				return { ok = exists, exitCode = if exists then 0 else 1, stdout = "", stderr = "" }
 			end
 			return { ok = true, exitCode = 0, stdout = "", stderr = "" }
 		end,
@@ -305,11 +331,79 @@ test.case("list only abbreviates paths inside the home directory", function(asse
 	assert.strContains(output[1], "\n    /src/widgets-feature")
 end)
 
-test.case("to reports PRs that have no local worktree", function(assert)
-	local ok, message = pcall(cli.execute, { "#43" }, (toDependencies({}, {})))
+local function commandsFrom(commands: { { string } }, program: string): { string }
+	local result: { string } = {}
+	for _, argv in commands do
+		if argv[1] == program then
+			table.insert(result, table.concat(argv, " "))
+		end
+	end
+	return result
+end
+
+test.case("to checks out a PR URL without a worktree beside the primary checkout", function(assert)
+	local commands: { { string } } = {}
+	local output: { string } = {}
+	local dependencies, writes = toDependencies(commands, output)
+	cli.execute({ "https://github.com/Example/Widgets/pull/7" }, dependencies)
+
+	local gitCommands = commandsFrom(commands, "git")
+	assert.eq(gitCommands[1], "git -C /src/widgets fetch origin +refs/heads/fix/thing:refs/remotes/origin/fix/thing")
+	assert.eq(gitCommands[2], "git -C /src/widgets show-ref --verify --quiet refs/heads/fix/thing")
+	assert.eq(
+		gitCommands[3],
+		"git -C /src/widgets worktree add --track -b fix/thing /src/widgets-pr-7 origin/fix/thing"
+	)
+	assert.eq(table.concat(lastCommand(commands), " "), "code /src/widgets-pr-7")
+	assert.strContains(output[1], "Checked out Example/Widgets#7 in /src/widgets-pr-7")
+
+	local cached = writes[#writes]
+	local entry = cached.entries[#cached.entries]
+	assert.eq(tostring(entry.worktree.path), "/src/widgets-pr-7")
+	assert.eq(entry.worktree.repository, "example/widgets")
+	assert.eq(entry.pullRequest and entry.pullRequest.number, 7)
+end)
+
+test.case("to checks out fork PRs from refs/pull into a PR-named branch", function(assert)
+	local commands: { { string } } = {}
+	cli.execute({ "example/widgets#8" }, (toDependencies(commands, {})))
+	local gitCommands = commandsFrom(commands, "git")
+	assert.eq(gitCommands[1], "git -C /src/widgets fetch origin refs/pull/8/head")
+	assert.eq(gitCommands[3], "git -C /src/widgets worktree add -b pr-8 /src/widgets-pr-8 FETCH_HEAD")
+	assert.eq(lastCommand(commands)[2], "/src/widgets-pr-8")
+end)
+
+test.case("to fast-forwards and reuses an existing local branch for a PR checkout", function(assert)
+	local commands: { { string } } = {}
+	cli.execute({ "widgets#10" }, (toDependencies(commands, {})))
+	local gitCommands = commandsFrom(commands, "git")
+	assert.eq(gitCommands[3], "git -C /src/widgets fetch origin refs/heads/existing:refs/heads/existing")
+	assert.eq(gitCommands[4], "git -C /src/widgets worktree add /src/widgets-pr-10 existing")
+end)
+
+test.case("to opens a worktree already on a PR's branch instead of adding one", function(assert)
+	local commands: { { string } } = {}
+	local output: { string } = {}
+	cli.execute({ "example/widgets#9" }, (toDependencies(commands, output)))
+	assert.eq(#commandsFrom(commands, "git"), 0)
+	assert.eq(#output, 0)
+	assert.eq(lastCommand(commands)[2], "/src/widgets-feature")
+end)
+
+test.case("to checks out the viewer's PR that has no worktree and drops it from the orphan list", function(assert)
+	local commands: { { string } } = {}
+	local dependencies, writes = toDependencies(commands, {})
+	cli.execute({ "#43" }, dependencies)
+	assert.eq(lastCommand(commands)[2], "/src/widgets-pr-43")
+	assert.eq(#writes[#writes].pullRequests, 0)
+end)
+
+test.case("to reports PRs in repositories without a local clone", function(assert)
+	local commands: { { string } } = {}
+	local ok, message = pcall(cli.execute, { "other/thing#5" }, (toDependencies(commands, {})))
 	assert.eq(ok, false)
-	assert.strContains(tostring(message), "no local worktree")
-	assert.strContains(tostring(message), "https://github.com/example/widgets/pull/43")
+	assert.strContains(tostring(message), "no local clone of other/thing")
+	assert.eq(#commandsFrom(commands, "git"), 0)
 end)
 
 test.case("list prints worktrees, PRs, and orphaned PRs for humans", function(assert)

@@ -3,7 +3,15 @@ import type { HopList, HopPullRequest, HopWorktree } from "./hop";
 // Plain Quick Pick item data, kept free of the vscode module so it can be unit tested.
 export type Target =
 	| { kind: "worktree"; worktree: HopWorktree }
-	| { kind: "pullRequest"; pullRequest: HopPullRequest };
+	| { kind: "pullRequest"; pullRequest: HopPullRequest }
+	| { kind: "checkout"; repository: string; number: number };
+
+// A pasted PR URL, `owner/repo#123`, `repo#123`, or `#123`. Bare numbers stay ordinary search words.
+export interface PullRequestReference {
+	number: number;
+	repository?: string;
+	repositoryName?: string;
+}
 
 export interface Item {
 	label: string;
@@ -43,7 +51,108 @@ function pullRequestSummary(pullRequest: HopPullRequest): string {
 }
 
 export function worktreeKey(target: Target): string {
-	return target.kind === "worktree" ? target.worktree.path : target.pullRequest.url;
+	switch (target.kind) {
+		case "worktree":
+			return target.worktree.path;
+		case "pullRequest":
+			return target.pullRequest.url;
+		case "checkout":
+			return `${target.repository}#${target.number}`;
+	}
+}
+
+const REPOSITORY = String.raw`[\w.-]+/[\w.-]+`;
+const NAME = String.raw`[\w.-]+`;
+
+export function parsePullRequestReference(query: string): PullRequestReference | undefined {
+	const text = query.trim();
+	const full =
+		text.match(new RegExp(String.raw`^https?://github\.com/(${REPOSITORY})/pull/(\d+)`, "i")) ??
+		text.match(new RegExp(String.raw`^(${REPOSITORY})#(\d+)$`));
+	if (full) {
+		return { repository: full[1], number: Number(full[2]) };
+	}
+	const named = text.match(new RegExp(String.raw`^(${NAME})#(\d+)$`));
+	if (named) {
+		return { repositoryName: named[1], number: Number(named[2]) };
+	}
+	const bare = text.match(/^#(\d+)$/);
+	return bare ? { number: Number(bare[1]) } : undefined;
+}
+
+// A bare `#N` intentionally matches every known repository, like `hop to #N`; each row names its repository.
+function repositoryMatches(reference: PullRequestReference, repository: string): boolean {
+	const normalized = repository.toLowerCase();
+	if (reference.repository) {
+		return normalized === reference.repository.toLowerCase();
+	}
+	if (reference.repositoryName) {
+		return repositoryName(normalized) === reference.repositoryName.toLowerCase();
+	}
+	return true;
+}
+
+function referenceMatches(reference: PullRequestReference, pullRequest: HopPullRequest | undefined): boolean {
+	return (
+		pullRequest !== undefined &&
+		pullRequest.number === reference.number &&
+		repositoryMatches(reference, pullRequest.repository)
+	);
+}
+
+// Hop checks fork PRs out as `pr-<number>`. GitHub listings skip fork PRs, so the branch is the only link.
+function isForkCheckout(worktree: HopWorktree, reference: PullRequestReference): boolean {
+	const remote = worktree.repository.remote;
+	return worktree.branch === `pr-${reference.number}` && remote !== undefined && repositoryMatches(reference, remote);
+}
+
+// For a PR Hop does not know about. Mirrors `hop to`: a full reference names its repository;
+// otherwise the repository name must match exactly one known repository.
+function checkoutTarget(list: HopList, reference: PullRequestReference): Target | undefined {
+	if (reference.repository) {
+		return { kind: "checkout", repository: reference.repository, number: reference.number };
+	}
+	if (!reference.repositoryName) {
+		return undefined;
+	}
+	const repositories = new Map<string, string>();
+	for (const worktree of list.worktrees) {
+		const remote = worktree.repository.remote;
+		if (remote && repositoryMatches(reference, remote)) {
+			repositories.set(remote.toLowerCase(), remote);
+		}
+	}
+	const [repository, ...others] = repositories.values();
+	return repository && others.length === 0 ? { kind: "checkout", repository, number: reference.number } : undefined;
+}
+
+export function checkoutItem(target: Target & { kind: "checkout" }): Item {
+	return {
+		label: `$(git-pull-request-create) Check out ${target.repository}#${target.number}`,
+		detail: "Create a local worktree for this pull request",
+		target,
+	};
+}
+
+function pullRequestReferenceItems(
+	list: HopList,
+	reference: PullRequestReference,
+	home: string,
+	currentPath: string | undefined,
+): Item[] {
+	const worktrees = list.worktrees.filter(
+		(worktree) => referenceMatches(reference, worktree.pr) || isForkCheckout(worktree, reference),
+	);
+	if (worktrees.length > 0) {
+		return worktrees.map((worktree) => worktreeItem(worktree, home, worktree.path === currentPath));
+	}
+	// Known PRs without a worktree check out from their own rows.
+	const pullRequests = list.pullRequests.filter((pullRequest) => referenceMatches(reference, pullRequest));
+	if (pullRequests.length > 0) {
+		return [{ label: "Pull requests without a worktree", separator: true }, ...pullRequests.map(pullRequestItem)];
+	}
+	const target = checkoutTarget(list, reference);
+	return target?.kind === "checkout" ? [checkoutItem(target)] : [];
 }
 
 export function worktreeItem(worktree: HopWorktree, home: string, current: boolean): Item {
@@ -111,6 +220,7 @@ function namesDefaultCheckout(worktree: HopWorktree, queryWords: string[]): bool
 	return queryWords.some((word) => names.includes(word));
 }
 
+// A PR reference lists the worktree for that PR, or offers to check it out.
 // Without a query: recently picked worktrees first, then everything else by repository.
 // With a query: every word must match a branch, folder, repository, or PR; a named repository's
 // default-branch checkout comes first, then the most recently changed. The current worktree goes last.
@@ -121,6 +231,10 @@ export function buildItems(
 	home: string,
 	query = "",
 ): Item[] {
+	const reference = parsePullRequestReference(query);
+	if (reference) {
+		return pullRequestReferenceItems(list, reference, home, currentPath);
+	}
 	const queryWords = words(query);
 	const rank = new Map(recent.map((value, index) => [value, index]));
 	const worktrees = list.worktrees
