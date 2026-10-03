@@ -13,6 +13,8 @@ export type Worktree = {
 	path: path.Path,
 	branch: string?,
 	repository: string?,
+	root: string?,
+	head: string?,
 	primary: boolean,
 }
 
@@ -21,6 +23,9 @@ export type PullRequest = {
 	url: string,
 	branch: string,
 	repository: string,
+	title: string?,
+	state: string?,
+	draft: boolean?,
 }
 
 export type Message = {
