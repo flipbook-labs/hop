@@ -143,8 +143,58 @@ test.case("GitHub batches branch lookups into shared requests", function(assert)
 	assert.eq(branchCalls, 3)
 end)
 
+test.case("GitHub finds an open pull request older than the latest closed ones", function(assert)
+	local pullRequests, complete = github.listPullRequests(
+		{ worktree("example/widgets", "feature/hop") },
+		function(argv)
+			if isAuthoredQuery(argv) then
+				return result(true, '{"data":{"viewer":{"pullRequests":{"nodes":[]}}}}', "")
+			end
+			assert.eq(argv[5]:find("states: OPEN", 1, true) ~= nil, true)
+			return result(
+				true,
+				`\{"data":\{"branch1":\{"openPullRequests":\{"nodes":[{pullRequestJson(3, "feature/hop")}]},`
+					.. `"pullRequests":\{"nodes":[]}}}}`,
+				""
+			)
+		end
+	)
+	assert.eq(complete, true)
+	assert.eq(#pullRequests, 1)
+	assert.eq(pullRequests[1].number, 3)
+end)
+
+test.case("GitHub reports an incomplete lookup when a resolved repository omits a connection", function(assert)
+	local pullRequests, complete = github.listPullRequests(
+		{ worktree("example/widgets", "feature/hop") },
+		function(argv)
+			if isAuthoredQuery(argv) then
+				return result(true, '{"data":{"viewer":{"pullRequests":{"nodes":[]}}}}', "")
+			end
+			return result(
+				false,
+				`\{"data":\{"branch1":\{"openPullRequests":null,"pullRequests":\{"nodes":[{pullRequestJson(
+					2,
+					"feature/hop"
+				)}]}}}}`,
+				"Something went wrong"
+			)
+		end
+	)
+	assert.eq(#pullRequests, 1)
+	assert.eq(complete, false)
+end)
+
+test.case("GitHub reports an incomplete lookup when a query returns no data", function(assert)
+	local pullRequests, complete = github.listPullRequests({ worktree("example/widgets", "feature/hop") }, function()
+		return result(false, "", "not authenticated")
+	end)
+	assert.eq(#pullRequests, 0)
+	assert.eq(complete, false)
+end)
+
 test.case("GitHub keeps branches that resolved when others in the batch fail", function(assert)
-	local pullRequests = github.listPullRequests({
+	local pullRequests, complete = github.listPullRequests({
 		worktree("example/widgets", "feature/hop"),
 		worktree("example/missing", "feature/hop"),
 	}, function(argv)
@@ -159,6 +209,7 @@ test.case("GitHub keeps branches that resolved when others in the batch fail", f
 	end)
 	assert.eq(#pullRequests, 1)
 	assert.eq(pullRequests[1].repository, "example/widgets")
+	assert.eq(complete, false)
 end)
 
 test.case("GitHub skips gh entirely without GitHub repositories", function(assert)
