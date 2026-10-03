@@ -15,6 +15,7 @@ export type Worktree = {
 	repository: string?,
 	root: string?,
 	head: string?,
+	defaultBranch: string?,
 	primary: boolean,
 }
 

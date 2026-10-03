@@ -34,13 +34,15 @@ test.case("discovery skips excluded and over-depth repositories but includes lin
 			calls += 1
 			if argv[6] == "origin" then
 				return successful("git@github.com:example/widgets.git\n")
+			elseif argv[4] == "symbolic-ref" then
+				return successful("origin/main\n")
 			end
 			return successful(
 				`worktree {primary}\nHEAD abc\nbranch refs/heads/main\n\nworktree {linked}\nHEAD def\nbranch refs/heads/feature/hop\n`
 			)
 		end,
 	})
-	assert.eq(calls, 2)
+	assert.eq(calls, 3)
 	assert.eq(#worktrees, 2)
 	local first = worktrees[1]
 	local second = worktrees[2]
@@ -51,7 +53,48 @@ test.case("discovery skips excluded and over-depth repositories but includes lin
 	assert.eq(linkedWorktree.repository, "example/widgets")
 	assert.eq(linkedWorktree.head, "def")
 	assert.eq(linkedWorktree.root, tostring(primary))
+	assert.eq(linkedWorktree.defaultBranch, "main")
 	assert.eq(primaryWorktree.primary, true)
+	assert.eq(primaryWorktree.defaultBranch, "main")
+end)
+
+test.case("discovery leaves the default branch unknown without origin/HEAD", function(assert)
+	local root, primary = fixture()
+	local worktrees = git.discover({ root }, {
+		runner = function(argv)
+			if argv[4] == "symbolic-ref" then
+				return { ok = false, exitCode = 1, stdout = "", stderr = "" }
+			end
+			return successful(`worktree {primary}\nHEAD abc\nbranch refs/heads/main\n`)
+		end,
+	})
+	assert.eq(#worktrees, 1)
+	assert.eq(worktrees[1].defaultBranch, nil)
+end)
+
+test.case("last activity follows the index of primary and linked worktrees", function(assert)
+	local root = path.join(system.tmpdir(), `hop-git-activity-{process.pid()}`)
+	if fs.exists(root) then
+		fs.removeDirectory(root, { recursive = true })
+	end
+	local primary = path.join(root, "repo")
+	local linkedGitDirectory = path.join(primary, ".git", "worktrees", "feature")
+	local linked = path.join(root, "repo-feature")
+	local empty = path.join(root, "empty")
+	fs.createDirectory(linkedGitDirectory, { makeParents = true })
+	fs.createDirectory(linked, { makeParents = true })
+	fs.createDirectory(empty, { makeParents = true })
+	fs.writeStringToFile(path.join(primary, ".git", "index"), "")
+	fs.writeStringToFile(path.join(linkedGitDirectory, "index"), "")
+	fs.writeStringToFile(path.join(linked, ".git"), `gitdir: {linkedGitDirectory}\n`)
+
+	local function activity(directory: path.Path): number
+		return git.lastActivity({ path = directory, primary = false })
+	end
+	local expected = fs.metadata(path.join(primary, ".git", "index")).modified:toSeconds()
+	assert.eq(activity(primary), expected)
+	assert.eq(activity(linked), fs.metadata(path.join(linkedGitDirectory, "index")).modified:toSeconds())
+	assert.eq(activity(empty), 0)
 end)
 
 test.case("discovery caps primary repositories", function(assert)
