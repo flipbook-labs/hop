@@ -212,6 +212,38 @@ test.case("GitHub keeps branches that resolved when others in the batch fail", f
 	assert.eq(complete, false)
 end)
 
+test.case("GitHub reports an incomplete lookup when a repository resolves to null without explanation", function(assert)
+	local _, complete = github.listPullRequests({ worktree("example/widgets", "feature/hop") }, function(argv)
+		if isAuthoredQuery(argv) then
+			return result(true, '{"data":{"viewer":{"pullRequests":{"nodes":[]}}}}', "")
+		end
+		return result(false, '{"data":{"branch1":null}}', "Something went wrong")
+	end)
+	assert.eq(complete, false)
+end)
+
+test.case("GitHub treats a repository it cannot find as a complete lookup", function(assert)
+	local pullRequests, complete = github.listPullRequests({
+		worktree("example/widgets", "feature/hop"),
+		worktree("example/missing", "feature/hop"),
+	}, function(argv)
+		if isAuthoredQuery(argv) then
+			return result(true, '{"data":{"viewer":{"pullRequests":{"nodes":[]}}}}', "")
+		end
+		return result(
+			false,
+			`\{"data":\{"branch1":\{"openPullRequests":\{"nodes":[]},"pullRequests":\{"nodes":[{pullRequestJson(
+				42,
+				"feature/hop"
+			)}]}},"branch2":null},`
+				.. `"errors":[\{"type":"NOT_FOUND","path":["branch2"],"message":"Could not resolve to a Repository"}]}`,
+			"Could not resolve to a Repository"
+		)
+	end)
+	assert.eq(#pullRequests, 1)
+	assert.eq(complete, true)
+end)
+
 test.case("GitHub skips gh entirely without GitHub repositories", function(assert)
 	local calls = 0
 	local pullRequests = github.listPullRequests({ worktree(nil, "main") }, function()

@@ -60,8 +60,13 @@ local function parsePullRequest(value: json.Value, repository: string): PullRequ
 	return pullRequestFromObject(object, repository)
 end
 
--- gh exits non-zero when part of a query fails but still prints the data that resolved.
-local function query(run: types.CommandRunner, text: string, variables: { [string]: string }): json.Object?
+-- gh exits non-zero when part of a query fails but still prints the data that resolved. The second
+-- result holds the top-level fields GitHub reported as not found, such as a deleted repository.
+local function query(
+	run: types.CommandRunner,
+	text: string,
+	variables: { [string]: string }
+): (json.Object?, { [string]: boolean })
 	local names: { string } = {}
 	for name in variables do
 		table.insert(names, name)
@@ -74,11 +79,23 @@ local function query(run: types.CommandRunner, text: string, variables: { [strin
 	end
 	local ok, response = pcall(run, argv)
 	if not ok then
-		return nil
+		return nil, {}
 	end
 	local decodedOk, decoded = pcall(json.deserialize, response.stdout)
 	local body = if decodedOk then json.asObject(decoded) else nil
-	return if body then json.asObject(body.data) else nil
+	if body == nil then
+		return nil, {}
+	end
+	local notFound: { [string]: boolean } = {}
+	for _, value in json.asArray(body.errors) or {} do
+		local graphqlError = json.asObject(value)
+		local path = if graphqlError then json.asArray(graphqlError.path) else nil
+		local field = if path then path[1] else nil
+		if graphqlError and graphqlError.type == "NOT_FOUND" and path and #path == 1 and type(field) == "string" then
+			notFound[field] = true
+		end
+	end
+	return json.asObject(body.data), notFound
 end
 
 local function nodes(connection: json.Value): json.Array
@@ -108,13 +125,18 @@ local function fetchBranches(batch: { Lookup }, run: types.CommandRunner): ({ Pu
 
 	local result: { PullRequest } = {}
 	local complete = true
-	local data = query(run, `query({table.concat(declarations, ", ")}) \{ {table.concat(selections, " ")} }`, variables)
+	local data, notFound =
+		query(run, `query({table.concat(declarations, ", ")}) \{ {table.concat(selections, " ")} }`, variables)
 	if data == nil then
 		error("pull request lookup failed")
 	end
 	for index, lookup in batch do
 		local repository = json.asObject(data[`branch{index}`])
 		if repository == nil then
+			-- A repository GitHub cannot find has no PRs to cache; any other missing result failed.
+			if not notFound[`branch{index}`] then
+				complete = false
+			end
 			continue
 		end
 		local defaultBranch = json.asObject(repository.defaultBranchRef)
