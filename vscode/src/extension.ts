@@ -41,7 +41,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			status.hide();
 			return;
 		}
-		const worktree = latest?.worktrees.find((candidate) => candidate.path === current);
+		const worktree = latest && hop.allWorktrees(latest).find((candidate) => candidate.path === current);
 		const name = worktree
 			? `${worktree.repository.name} · ${worktree.branch ?? "detached"}`
 			: (vscode.workspace.workspaceFolders?.[1]?.name ?? current);
@@ -96,7 +96,8 @@ export function activate(context: vscode.ExtensionContext): void {
 				const requested = new URLSearchParams(uri.query).get("path");
 				try {
 					// Only mount folders Hop already knows about, never arbitrary paths from a link.
-					const find = (list: hop.HopList) => list.worktrees.find((worktree) => worktree.path === requested);
+					const find = (list: hop.HopList) =>
+						hop.allWorktrees(list).find((worktree) => worktree.path === requested);
 					const worktree = find(await cached()) ?? find(await refresh());
 					if (!worktree) {
 						throw new Error(`Hop does not know a worktree at ${requested}`);

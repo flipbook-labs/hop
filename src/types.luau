@@ -27,6 +27,7 @@ export type PullRequest = {
 	title: string?,
 	state: string?,
 	draft: boolean?,
+	author: string?,
 }
 
 export type Message = {

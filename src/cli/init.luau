@@ -15,6 +15,7 @@ local git = require("@root/git")
 local github = require("@root/github")
 local loadConfig = require("@root/config/load")
 local matchWorktrees = require("@root/core/matchWorktrees")
+local others = require("@root/others")
 local providers = require("@root/providers")
 local render = require("@root/render")
 local resolve = require("@root/core/resolve")
@@ -31,6 +32,7 @@ export type Dependencies = {
 	loadSessions: (() -> { types.Session })?,
 	loadWorktrees: (() -> { types.Worktree })?,
 	cache: cache.Cache?,
+	others: others.Store?,
 	now: (() -> number)?,
 	activity: resolve.Activity?,
 }
@@ -43,6 +45,7 @@ type Resolved = {
 	loadWorktrees: () -> { types.Worktree },
 	loadSessions: () -> { types.Session },
 	cache: cache.Cache,
+	others: others.Store,
 	now: () -> number,
 	activity: resolve.Activity,
 }
@@ -64,9 +67,11 @@ local SUMMARY = "hop — jump from agent sessions and pull requests to local wor
 
 local EXPRESSIONS = [[
 Expressions:
-  owner/repo#123, repo#123, #123, 123, or a PR URL
-  a PR without a local worktree is checked out beside the repository as <folder>-pr-<number>
-  otherwise words that each match a branch, repository, folder name, or PR title
+  owner/repo#123, repo#123, #123, or a PR URL
+  your open PR without a worktree is checked out beside your clone as <folder>-pr-<number>
+  anyone else's is checked out under ~/.hop/cache, cloning the repository there if needed
+  otherwise words that each match a branch, repository, folder name, PR title, or repo#123 of your work
+  bare numbers are words; only references reach others' work
   `default` matches a repository's default branch, as in `hop flipbook default`
   A repository's default-branch checkout is listed first, then the most recently changed]]
 
@@ -188,11 +193,23 @@ local function dependencies(options: Dependencies?): Resolved
 			})
 		end,
 		cache = resolved.cache or cache.new(home),
+		others = resolved.others or others.new(home),
 		now = resolved.now or function()
 			return os.time()
 		end,
 		activity = resolved.activity or git.lastActivity,
 	}
+end
+
+-- Your worktrees, leaving out others' work that discovery reaches through your clones.
+local function ownWorktrees(deps: Resolved): { types.Worktree }
+	local result: { types.Worktree } = {}
+	for _, worktree in deps.loadWorktrees() do
+		if not others.contains(deps.homeDirectory, worktree.path) then
+			table.insert(result, worktree)
+		end
+	end
+	return result
 end
 
 -- Returns the cached snapshot when allowed, otherwise rebuilds it from Git and GitHub.
@@ -209,7 +226,7 @@ local function loadSnapshot(
 			return cached, true
 		end
 	end
-	local worktrees = deps.loadWorktrees()
+	local worktrees = ownWorktrees(deps)
 	local pullRequests: { types.PullRequest } = {}
 	local complete = false
 	if includePullRequests then
@@ -372,8 +389,11 @@ end
 
 local function list(deps: Resolved, options: ListOptions)
 	local value, cached = loadSnapshot(deps, options.refresh, options.pullRequests)
+	local otherEntries = deps.others.read()
 	if options.json then
-		deps.write(json.serialize(snapshot.toJson(value, deps.activity), true))
+		local object = snapshot.toJson(value, deps.activity)
+		object.others = snapshot.entriesToJson(otherEntries, deps.activity)
+		deps.write(json.serialize(object, true))
 		return
 	end
 	local sections: { string } = {}
@@ -393,6 +413,11 @@ local function list(deps: Resolved, options: ListOptions)
 			"Open pull requests without a local worktree:\n"
 				.. render.numberedWith(value.pullRequests, render.pullRequestLabel)
 		)
+	end
+	if #otherEntries > 0 then
+		table.insert(sections, "Others' pull requests:\n" .. render.numberedWith(otherEntries, function(entry)
+			return render.entryLabel(entry, deps.homeDirectory)
+		end))
 	end
 	if cached then
 		table.insert(sections, `Cached {age(deps.now() - value.generatedAt)}; run \`hop list --refresh\` to update.`)
@@ -420,36 +445,99 @@ local function hasMissingWorktree(entries: { snapshot.Entry }): boolean
 	return false
 end
 
+local function openChoice(deps: Resolved, entries: { snapshot.Entry })
+	local selected = render.chooseWith(entries, function(entry)
+		return render.entryLabel(entry, deps.homeDirectory)
+	end, deps.input, deps.write)
+	assert(selected, "no worktree selected")
+	editor.open(tostring(selected.worktree.path), deps.runner, deps.homeDirectory)
+end
+
+local function openCheckout(deps: Resolved, entry: snapshot.Entry, created: boolean, target: resolve.CheckoutTarget)
+	local worktreePath = tostring(entry.worktree.path)
+	if created then
+		deps.write(`Checked out {target.repository}#{target.number} in {worktreePath}`)
+	end
+	editor.open(worktreePath, deps.runner, deps.homeDirectory)
+end
+
+-- Your worktrees and open PRs come first, then others' work Hop already checked out. Anything else
+-- refreshes a cached snapshot once before checking out a PR or giving up.
 local function to(deps: Resolved, args: { string })
 	local text = table.concat(args, " ")
 	assert(text:match("%S"), "usage: hop to <expr>")
 	local expression = resolve.parse(text)
 	local value, cached = loadSnapshot(deps, false, true)
 	local resolution = resolve.resolve(value, expression, deps.activity)
-	if cached and (#resolution.entries == 0 or hasMissingWorktree(resolution.entries)) then
-		-- The cache may miss a worktree an agent just created or list one that was removed.
-		value = loadSnapshot(deps, true, true)
+	if cached and hasMissingWorktree(resolution.entries) then
+		-- The cache may list a worktree that was removed.
+		value, cached = loadSnapshot(deps, true, true)
 		resolution = resolve.resolve(value, expression, deps.activity)
 	end
+	local otherEntries = deps.others.read()
+	local target: resolve.CheckoutTarget? = nil
 	if #resolution.entries == 0 then
-		local target = resolve.checkoutTarget(value, expression, resolution)
-		if target == nil then
-			error(noWorktreeMessage(text, resolution.pullRequests), 0)
+		if #resolution.pullRequests == 0 then
+			local visited = resolve.resolveOthers(otherEntries, expression)
+			if #visited > 0 then
+				openChoice(deps, visited)
+				return
+			end
 		end
-		local result = checkout.pullRequest(value, target, deps.runner)
+		if cached then
+			-- The cache may predate a worktree an agent just created or one of your new PRs. Checking out
+			-- from it could add a branch that is already checked out or file your PR as someone else's.
+			value = loadSnapshot(deps, true, true)
+			resolution = resolve.resolve(value, expression, deps.activity)
+		end
+		if #resolution.entries == 0 and #resolution.pullRequests == 0 then
+			target = resolve.checkoutTarget(value, expression, otherEntries)
+		end
+	end
+
+	if #resolution.entries > 0 then
+		openChoice(deps, resolution.entries)
+		return
+	elseif expression.kind == "query" or #resolution.pullRequests > 1 then
+		error(noWorktreeMessage(text, resolution.pullRequests), 0)
+	elseif #resolution.pullRequests == 1 then
+		local pullRequest = resolution.pullRequests[1]
+		local own = { repository = pullRequest.repository, number = pullRequest.number }
+		local result = checkout.pullRequest(value, own, deps.runner)
 		deps.cache.write(value)
-		local worktreePath = tostring(result.entry.worktree.path)
-		if result.created then
-			deps.write(`Checked out {target.repository}#{target.number} in {worktreePath}`)
-		end
-		editor.open(worktreePath, deps.runner, deps.homeDirectory)
+		openCheckout(deps, result.entry, result.created, own)
 		return
 	end
-	local selected = render.chooseWith(resolution.entries, function(entry)
-		return render.entryLabel(entry, deps.homeDirectory)
-	end, deps.input, deps.write)
-	assert(selected, "no worktree selected")
-	editor.open(tostring(selected.worktree.path), deps.runner)
+	if target == nil then
+		error(noWorktreeMessage(text, {}), 0)
+	end
+
+	local result = checkout.reference(value, target, {
+		runner = deps.runner,
+		homeDirectory = deps.homeDirectory,
+		findClone = function(repository)
+			for _, worktree in ownWorktrees(deps) do
+				if worktree.primary and worktree.repository and worktree.repository:lower() == repository:lower() then
+					return worktree
+				end
+			end
+			return nil
+		end,
+	})
+	if result.other then
+		-- Read again so a checkout another Hop process finished meanwhile keeps its record.
+		local latest = deps.others.read()
+		for index = #latest, 1, -1 do
+			if tostring(latest[index].worktree.path) == tostring(result.entry.worktree.path) then
+				table.remove(latest, index)
+			end
+		end
+		table.insert(latest, result.entry)
+		deps.others.write(latest)
+	else
+		deps.cache.write(value)
+	end
+	openCheckout(deps, result.entry, result.created, target)
 end
 
 local function execute(args: { string }, options: Dependencies?)

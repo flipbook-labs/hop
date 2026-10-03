@@ -1,4 +1,6 @@
 import * as assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
 import { test } from "node:test";
 
 import type { HopList } from "../hop";
@@ -228,6 +230,64 @@ test("short PR references offer a checkout only when they name one repository", 
 	assert.deepEqual(kinds("hop#7"), ["checkout"]);
 	assert.deepEqual(kinds("#7"), []);
 	assert.deepEqual(kinds("missing#7"), []);
+});
+
+interface ExpressionCase {
+	input: string;
+	reference?: { repository?: string; repositoryName?: string; number: number };
+}
+
+// The CLI's resolver runs the same cases, so Hop: Go and `hop <expr>` agree.
+test("parsePullRequestReference agrees with the shared expression cases", () => {
+	const file = path.join(__dirname, "..", "..", "..", "src", "core", "expressions.json");
+	const cases = JSON.parse(readFileSync(file, "utf8")) as ExpressionCase[];
+	for (const { input, reference } of cases) {
+		assert.deepEqual(parsePullRequestReference(input), reference, input);
+	}
+});
+
+const withOthers: HopList = {
+	...list,
+	others: [
+		{
+			repository: { name: "foundation", remote: "Roblox/foundation" },
+			path: "/home/me/.hop/cache/worktrees/roblox/foundation-pr-2186",
+			branch: "alberto/fonts",
+			primary: false,
+			pr: {
+				repository: "Roblox/foundation",
+				number: 2186,
+				title: "Update fonts",
+				url: "https://github.com/Roblox/foundation/pull/2186",
+				branch: "alberto/fonts",
+				author: "alberto",
+			},
+		},
+	],
+};
+
+test("a PR reference reaches others' work Hop already checked out", () => {
+	for (const query of ["https://github.com/Roblox/foundation/pull/2186", "foundation#2186", "#2186"]) {
+		const items = buildItems(withOthers, [], undefined, "/home/me", query);
+		assert.equal(items.length, 1, query);
+		assert.equal(items[0].label, "$(account) alberto/fonts");
+		assert.equal(items[0].description, "foundation · @alberto");
+		assert.equal(items[0].target?.kind, "worktree");
+	}
+	assert.deepEqual(
+		buildItems(withOthers, [], undefined, "/home/me", "foundation#7").map((item) => item.target?.kind),
+		["checkout"],
+	);
+});
+
+test("others' work never appears for search words or an empty query", () => {
+	const paths = (query: string) =>
+		buildItems(withOthers, [], undefined, "/home/me", query).flatMap((item) =>
+			item.target?.kind === "worktree" ? [item.target.worktree.path] : [],
+		);
+	assert.ok(!paths("").some((value) => value.includes(".hop/cache")));
+	assert.deepEqual(paths("fonts"), []);
+	assert.deepEqual(paths("2186"), []);
 });
 
 test("only paths inside the home directory are shortened", () => {

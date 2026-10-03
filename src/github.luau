@@ -14,7 +14,8 @@ type Lookup = {
 local BATCH_SIZE = 25
 local CONCURRENCY = 5
 local AUTHORED_PAGES = 5
-local NODE_FIELDS = "number title url headRefName state isDraft isCrossRepository"
+local NODE_FIELDS = "number title url headRefName state isDraft isCrossRepository author { login }"
+local VIEW_FIELDS = "number,title,url,headRefName,state,isDraft,isCrossRepository,author"
 
 local STATE_RANK: { [string]: number } = {
 	OPEN = 3,
@@ -36,6 +37,8 @@ local function pullRequestFromObject(object: json.Object, repository: string): P
 	local title = object.title
 	local state = object.state
 	local draft = object.isDraft
+	local author = json.asObject(object.author)
+	local login = if author then author.login else nil
 	return {
 		number = number,
 		url = url,
@@ -44,6 +47,7 @@ local function pullRequestFromObject(object: json.Object, repository: string): P
 		title = if type(title) == "string" then title else nil,
 		state = if type(state) == "string" then state else nil,
 		draft = if type(draft) == "boolean" then draft else nil,
+		author = if type(login) == "string" then login else nil,
 	}
 end
 
@@ -286,7 +290,7 @@ local function viewPullRequest(repository: string, number: number, runner: types
 		"--repo",
 		repository,
 		"--json",
-		(NODE_FIELDS:gsub(" ", ",")),
+		VIEW_FIELDS,
 	})
 	if not ok then
 		error(`unable to run gh: {response}`, 0)
@@ -303,7 +307,20 @@ local function viewPullRequest(repository: string, number: number, runner: types
 	return pullRequest, object.isCrossRepository == true
 end
 
+-- A blobless partial clone: Git fetches file contents as they are checked out, so cloning stays quick.
+local function cloneRepository(repository: string, destination: string, runner: types.CommandRunner?)
+	local run = runner or defaultRun
+	local ok, response = pcall(run, { "gh", "repo", "clone", repository, destination, "--", "--filter=blob:none" })
+	if not ok then
+		error(`unable to run gh: {response}`, 0)
+	elseif not response.ok then
+		local detail = response.stderr:match("^%s*(.-)%s*$") or ""
+		error(`unable to clone {repository}: {detail}`, 0)
+	end
+end
+
 return table.freeze({
+	cloneRepository = cloneRepository,
 	indexPullRequests = indexPullRequests,
 	listPullRequests = listPullRequests,
 	pullRequestKey = pullRequestKey,

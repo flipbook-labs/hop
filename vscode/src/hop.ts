@@ -11,6 +11,7 @@ export interface HopPullRequest {
 	branch: string;
 	state?: string;
 	draft?: boolean;
+	author?: string;
 }
 
 export interface HopWorktree {
@@ -29,6 +30,12 @@ export interface HopList {
 	generatedAt: number;
 	worktrees: HopWorktree[];
 	pullRequests: HopPullRequest[];
+	// Worktrees Hop checked out for other people's PRs, reached only by PR reference.
+	others?: HopWorktree[];
+}
+
+export function allWorktrees(list: HopList): HopWorktree[] {
+	return [...list.worktrees, ...(list.others ?? [])];
 }
 
 export function resolveHopPath(extensionPath: string, configured: string): string {

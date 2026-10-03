@@ -1,8 +1,10 @@
 local fs = require("@std/fs")
 local path = require("@std/path")
 
+local defaultRun = require("@root/command")
 local git = require("@root/git")
 local github = require("@root/github")
+local others = require("@root/others")
 local resolve = require("@root/core/resolve")
 local snapshot = require("@root/core/snapshot")
 local types = require("@root/types")
@@ -10,6 +12,20 @@ local types = require("@root/types")
 export type Result = {
 	entry: snapshot.Entry,
 	created: boolean,
+}
+
+export type ReferenceOptions = {
+	runner: types.CommandRunner?,
+	homeDirectory: string,
+	-- Rediscovers a clone the cache does not know yet, so Hop never clones a repository you already have.
+	findClone: (repository: string) -> types.Worktree?,
+}
+
+export type ReferenceResult = {
+	entry: snapshot.Entry,
+	created: boolean,
+	-- The worktree belongs with others' work rather than in the snapshot.
+	other: boolean,
 }
 
 local function sameRepository(left: string?, right: string): boolean
@@ -81,7 +97,7 @@ local function pullRequest(
 		path = tostring(destination),
 		number = details.number,
 		branch = branch,
-		crossRepository = crossRepository,
+		fromPullRef = crossRepository,
 	}, runner)
 
 	local entry: snapshot.Entry = {
@@ -101,6 +117,102 @@ local function pullRequest(
 	return { entry = entry, created = true }
 end
 
+-- One of your worktrees on `branch`, from the snapshot or, failing that, from the clone itself.
+local function ownWorktree(
+	value: snapshot.Snapshot,
+	primary: types.Worktree,
+	branch: string,
+	options: ReferenceOptions
+): snapshot.Entry?
+	local repository = primary.repository
+	for _, entry in value.entries do
+		if entry.worktree.branch == branch and sameRepository(entry.worktree.repository, repository or "") then
+			return entry
+		end
+	end
+	local root = primary.root or tostring(primary.path)
+	local run = options.runner or defaultRun
+	local ok, response = pcall(run, { "git", "-C", root, "worktree", "list", "--porcelain" })
+	if not ok or not response.ok then
+		return nil
+	end
+	for _, worktree in git.parseWorktreeList(response.stdout, repository, root, primary.defaultBranch) do
+		if worktree.branch == branch and not others.contains(options.homeDirectory, worktree.path) then
+			local entry: snapshot.Entry = { worktree = worktree, pullRequest = nil }
+			table.insert(value.entries, entry)
+			return entry
+		end
+	end
+	return nil
+end
+
+-- Opens a PR that neither the cache nor others' work knows. A worktree of yours already on its branch
+-- is yours; otherwise the PR is someone else's and is checked out under ~/.hop/cache, linked to your
+-- clone when you have one and to a fresh clone in ~/.hop/cache/repos when you do not. Others' PRs are
+-- always fetched from `refs/pull/<number>/head` into `pr-<number>`, so PRs sharing a head branch never
+-- compete for one local branch.
+local function reference(
+	value: snapshot.Snapshot,
+	target: resolve.CheckoutTarget,
+	options: ReferenceOptions
+): ReferenceResult
+	local primary = checkoutOf(value, target.repository) or options.findClone(target.repository)
+	local repository = if primary and primary.repository then primary.repository else target.repository
+	local details, crossRepository = github.viewPullRequest(repository, target.number, options.runner)
+	local branch = localBranch(details, crossRepository)
+
+	if primary then
+		local own = ownWorktree(value, primary, branch, options)
+		if own then
+			own.pullRequest = own.pullRequest or details
+			removePullRequest(value, details)
+			return { entry = own, created = false, other = false }
+		end
+	end
+
+	local root: string
+	if primary then
+		root = primary.root or tostring(primary.path)
+	else
+		local clone = others.clonePath(options.homeDirectory, repository)
+		if not fs.exists(clone) then
+			github.cloneRepository(repository, tostring(clone), options.runner)
+		end
+		root = tostring(clone)
+	end
+
+	local destination = others.worktreePath(options.homeDirectory, repository, details.number)
+	if fs.exists(destination) then
+		error(`{destination} already exists but Hop has no record of it; remove it and try again`, 0)
+	end
+	local otherBranch = `pr-{details.number}`
+	git.addPullRequestWorktree({
+		primary = root,
+		path = tostring(destination),
+		number = details.number,
+		branch = otherBranch,
+		fromPullRef = true,
+	}, options.runner)
+
+	return {
+		entry = {
+			worktree = {
+				path = destination,
+				branch = otherBranch,
+				repository = repository,
+				root = root,
+				head = nil,
+				defaultBranch = if primary then primary.defaultBranch else nil,
+				primary = false,
+			},
+			pullRequest = details,
+		},
+		created = true,
+		other = true,
+	}
+end
+
 return table.freeze({
 	pullRequest = pullRequest,
+	reference = reference,
 })
