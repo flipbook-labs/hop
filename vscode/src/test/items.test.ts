@@ -230,6 +230,19 @@ test("short PR references offer a checkout only when they name one repository", 
 	assert.deepEqual(kinds("missing#7"), []);
 });
 
+test("only paths inside the home directory are shortened", () => {
+	const sibling: HopList = {
+		generatedAt: 0,
+		worktrees: [
+			{ repository: { name: "home" }, path: "/home/me", branch: "main", primary: true },
+			{ repository: { name: "other" }, path: "/home/me2/project", branch: "main", primary: true },
+		],
+		pullRequests: [],
+	};
+	const details = buildItems(sibling, [], undefined, "/home/me/").map((item) => item.detail);
+	assert.deepEqual(details, ["no PR · ~", "no PR · /home/me2/project"]);
+});
+
 test("recordRecent moves a path to the front and caps the list", () => {
 	assert.deepEqual(recordRecent(["a", "b", "c"], "b"), ["b", "a", "c"]);
 	assert.deepEqual(recordRecent(["a", "b"], "c", 2), ["c", "a"]);

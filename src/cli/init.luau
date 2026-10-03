@@ -1,4 +1,5 @@
 local batteriesCli = require("@batteries/cli")
+local fs = require("@std/fs")
 local io = require("@std/io")
 local json = require("@std/json")
 local path = require("@std/path")
@@ -195,7 +196,8 @@ local function dependencies(options: Dependencies?): Resolved
 end
 
 -- Returns the cached snapshot when allowed, otherwise rebuilds it from Git and GitHub.
--- Local-only rebuilds are not cached so they never discard known PR associations.
+-- Rebuilds without a complete GitHub lookup are not cached so they never discard known PR
+-- associations. A cache that cannot be written only costs the next command a rebuild.
 local function loadSnapshot(
 	deps: Resolved,
 	refresh: boolean,
@@ -208,10 +210,14 @@ local function loadSnapshot(
 		end
 	end
 	local worktrees = deps.loadWorktrees()
-	local pullRequests = if includePullRequests then github.listPullRequests(worktrees, deps.runner) else {}
-	local value = snapshot.build(worktrees, pullRequests, deps.now())
+	local pullRequests: { types.PullRequest } = {}
+	local complete = false
 	if includePullRequests then
-		deps.cache.write(value)
+		pullRequests, complete = github.listPullRequests(worktrees, deps.runner)
+	end
+	local value = snapshot.build(worktrees, pullRequests, deps.now())
+	if complete then
+		pcall(deps.cache.write, value)
 	end
 	return value, false
 end
@@ -285,7 +291,7 @@ local function attachPullRequests(items: { RecentItem }, runner: types.CommandRu
 			table.insert(worktrees, item.worktree)
 		end
 	end
-	local pullRequests = github.indexPullRequests(github.listPullRequests(worktrees, runner))
+	local pullRequests = github.indexPullRequests((github.listPullRequests(worktrees, runner)))
 	for _, item in items do
 		local worktree = item.worktree
 		if worktree and worktree.repository and worktree.branch then
@@ -405,14 +411,23 @@ local function noWorktreeMessage(expression: string, pullRequests: { types.PullR
 	return table.concat(lines, "\n")
 end
 
+local function hasMissingWorktree(entries: { snapshot.Entry }): boolean
+	for _, entry in entries do
+		if not fs.exists(entry.worktree.path) then
+			return true
+		end
+	end
+	return false
+end
+
 local function to(deps: Resolved, args: { string })
 	local text = table.concat(args, " ")
 	assert(text:match("%S"), "usage: hop to <expr>")
 	local expression = resolve.parse(text)
 	local value, cached = loadSnapshot(deps, false, true)
 	local resolution = resolve.resolve(value, expression, deps.activity)
-	if #resolution.entries == 0 and cached then
-		-- The worktree may be newer than the cache, such as one an agent just created.
+	if cached and (#resolution.entries == 0 or hasMissingWorktree(resolution.entries)) then
+		-- The cache may miss a worktree an agent just created or list one that was removed.
 		value = loadSnapshot(deps, true, true)
 		resolution = resolve.resolve(value, expression, deps.activity)
 	end
@@ -434,7 +449,7 @@ local function to(deps: Resolved, args: { string })
 		return render.entryLabel(entry, deps.homeDirectory)
 	end, deps.input, deps.write)
 	assert(selected, "no worktree selected")
-	editor.open(tostring(selected.worktree.path), deps.runner, deps.homeDirectory)
+	editor.open(tostring(selected.worktree.path), deps.runner)
 end
 
 local function execute(args: { string }, options: Dependencies?)

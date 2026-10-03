@@ -22,7 +22,11 @@ export interface Item {
 }
 
 function tilde(value: string, home: string): string {
-	return home !== "" && value.startsWith(home) ? `~${value.slice(home.length)}` : value;
+	const root = home.replace(/\/+$/, "");
+	if (root === "" || (value !== root && !value.startsWith(`${root}/`))) {
+		return value;
+	}
+	return `~${value.slice(root.length)}`;
 }
 
 function repositoryName(repository: string): string {
