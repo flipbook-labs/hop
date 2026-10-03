@@ -1,10 +1,7 @@
-local fs = require("@std/fs")
-local path = require("@std/path")
-
 local defaultRun = require("@root/command")
 local types = require("@root/types")
 
-local EXTENSION_PREFIX = "flipbook-labs.hop-"
+local EXTENSION_ID = "flipbook-labs.hop"
 
 local function invoke(argv: { string }, runner: types.CommandRunner?)
 	local run = runner or defaultRun
@@ -17,13 +14,16 @@ local function invoke(argv: { string }, runner: types.CommandRunner?)
 	end
 end
 
-local function extensionInstalled(homeDirectory: string): boolean
-	local ok, entries = pcall(fs.listDirectory, path.join(homeDirectory, ".vscode", "extensions"))
-	if not ok then
+-- Asks VS Code rather than inspecting its extensions folder, which can keep uninstalled
+-- extensions until VS Code cleans up. VS Code's CLI cannot report whether an extension is disabled.
+local function extensionInstalled(runner: types.CommandRunner?): boolean
+	local run = runner or defaultRun
+	local ok, result = pcall(run, { "code", "--list-extensions" })
+	if not ok or not result.ok then
 		return false
 	end
-	for _, entry in entries :: { fs.DirectoryEntry } do
-		if entry.name:sub(1, #EXTENSION_PREFIX) == EXTENSION_PREFIX then
+	for line in result.stdout:gmatch("[^\r\n]+") do
+		if line:lower() == EXTENSION_ID then
 			return true
 		end
 	end
@@ -42,8 +42,8 @@ end
 
 -- With the Hop extension installed, the most recently focused VS Code window switches to
 -- the folder in place. Otherwise VS Code opens it the usual way.
-local function open(directory: string, runner: types.CommandRunner?, homeDirectory: string?)
-	if homeDirectory and extensionInstalled(homeDirectory) then
+local function open(directory: string, runner: types.CommandRunner?)
+	if extensionInstalled(runner) then
 		invoke({ "open", handoffUri(directory) }, runner)
 		return
 	end

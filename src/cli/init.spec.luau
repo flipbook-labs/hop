@@ -119,7 +119,7 @@ local function memoryCache(initial: snapshot.Snapshot?): (cache.Cache, { snapsho
 end
 
 -- One response serves both the branch lookup and the viewer's open PRs.
-local pullRequestList = '{"data":{"branch2":{"defaultBranchRef":{"name":"main"},"pullRequests":{"nodes":['
+local pullRequestList = '{"data":{"branch2":{"defaultBranchRef":{"name":"main"},"openPullRequests":{"nodes":[]},"pullRequests":{"nodes":['
 	.. '{"number":42,"title":"Add the hop command","headRefName":"feature/hop","url":"https://github.com/example/widgets/pull/42","state":"OPEN","isDraft":false}]}},'
 	.. '"viewer":{"pullRequests":{"pageInfo":{"hasNextPage":false},"nodes":['
 	.. '{"number":43,"title":"Orphaned idea","headRefName":"elsewhere","url":"https://github.com/example/widgets/pull/43","state":"OPEN","isDraft":true,"repository":{"nameWithOwner":"example/widgets"}}]}}}}'
@@ -255,6 +255,54 @@ test.case("to refreshes a stale cache once before giving up", function(assert)
 	cli.execute({ "feature/hop" }, dependencies)
 	assert.eq(#writes, 1)
 	assert.eq(lastCommand(commands)[2], "/src/widgets-feature")
+end)
+
+test.case("to refreshes a cache whose matching worktree was removed", function(assert)
+	local removed: types.Worktree = {
+		path = path.parse("/nonexistent/hop-removed-worktree"),
+		branch = "gone",
+		repository = "example/widgets",
+		primary = false,
+	}
+	local stale = snapshot.build({ worktrees[1], removed }, {}, 0)
+	local dependencies, writes = toDependencies({}, {}, stale)
+	local ok, message = pcall(cli.execute, { "gone" }, dependencies)
+	assert.eq(ok, false)
+	assert.strContains(tostring(message), 'nothing matches "gone"')
+	assert.eq(#writes, 1)
+end)
+
+test.case("to still opens a worktree when the cache cannot be written", function(assert)
+	local commands: { { string } } = {}
+	local dependencies = toDependencies(commands, {})
+	dependencies.cache = {
+		read = function()
+			return nil
+		end,
+		write = function(_value: snapshot.Snapshot): ()
+			error("read-only file system")
+		end,
+	}
+	cli.execute({ "feature/hop" }, dependencies)
+	assert.eq(lastCommand(commands)[2], "/src/widgets-feature")
+end)
+
+test.case("a failed GitHub lookup does not replace the cache", function(assert)
+	local dependencies, writes = toDependencies({}, {})
+	dependencies.runner = function()
+		return { ok = false, exitCode = 1, stdout = "", stderr = "not authenticated" }
+	end
+	cli.execute({ "list", "--refresh" }, dependencies)
+	assert.eq(#writes, 0)
+end)
+
+test.case("list only abbreviates paths inside the home directory", function(assert)
+	local output: { string } = {}
+	local dependencies = toDependencies({}, output)
+	dependencies.homeDirectory = "/src/widgets"
+	cli.execute({ "list" }, dependencies)
+	assert.strContains(output[1], "\n    ~\n")
+	assert.strContains(output[1], "\n    /src/widgets-feature")
 end)
 
 test.case("to reports PRs that have no local worktree", function(assert)

@@ -80,7 +80,7 @@ end
 
 -- Looks up PRs by each worktree's branch. Default branches are skipped because
 -- release and sync PRs often use them as their head.
-local function fetchBranches(batch: { Lookup }, run: types.CommandRunner): { PullRequest }
+local function fetchBranches(batch: { Lookup }, run: types.CommandRunner): ({ PullRequest }, boolean)
 	local declarations: { string } = {}
 	local selections: { string } = {}
 	local variables: { [string]: string } = {}
@@ -90,6 +90,7 @@ local function fetchBranches(batch: { Lookup }, run: types.CommandRunner): { Pul
 		table.insert(
 			selections,
 			`branch{index}: repository(owner: $owner{index}, name: $name{index}) \{ defaultBranchRef \{ name } `
+				.. `openPullRequests: pullRequests(headRefName: $branch{index}, states: OPEN, first: 5, orderBy: \{field: CREATED_AT, direction: DESC}) \{ nodes \{ {NODE_FIELDS} } } `
 				.. `pullRequests(headRefName: $branch{index}, first: 5, orderBy: \{field: CREATED_AT, direction: DESC}) \{ nodes \{ {NODE_FIELDS} } } }`
 		)
 		variables[`owner{index}`] = owner or ""
@@ -98,9 +99,10 @@ local function fetchBranches(batch: { Lookup }, run: types.CommandRunner): { Pul
 	end
 
 	local result: { PullRequest } = {}
+	local complete = true
 	local data = query(run, `query({table.concat(declarations, ", ")}) \{ {table.concat(selections, " ")} }`, variables)
 	if data == nil then
-		return result
+		error("pull request lookup failed")
 	end
 	for index, lookup in batch do
 		local repository = json.asObject(data[`branch{index}`])
@@ -111,14 +113,22 @@ local function fetchBranches(batch: { Lookup }, run: types.CommandRunner): { Pul
 		if defaultBranch and defaultBranch.name == lookup.branch then
 			continue
 		end
-		for _, value in nodes(repository.pullRequests) do
-			local pullRequest = parsePullRequest(value, lookup.repository)
-			if pullRequest then
-				table.insert(result, pullRequest)
+		-- Open PRs are fetched separately so newer closed PRs on a reused branch cannot crowd them out.
+		-- A connection missing from a resolved repository means that part of the query failed.
+		for _, field in { "openPullRequests", "pullRequests" } do
+			local connection = json.asObject(repository[field])
+			if connection == nil then
+				complete = false
+			end
+			for _, value in nodes(connection) do
+				local pullRequest = parsePullRequest(value, lookup.repository)
+				if pullRequest then
+					table.insert(result, pullRequest)
+				end
 			end
 		end
 	end
-	return result
+	return result, complete
 end
 
 -- The viewer's open PRs in known repositories, so in-flight work without a worktree still shows up.
@@ -144,7 +154,7 @@ local function fetchAuthored(repositories: { [string]: string }, run: types.Comm
 		local viewer = if data then json.asObject(data.viewer) else nil
 		local connection = if viewer then json.asObject(viewer.pullRequests) else nil
 		if connection == nil then
-			break
+			error("authored pull request lookup failed")
 		end
 		for _, value in nodes(connection) do
 			local object = json.asObject(value)
@@ -169,16 +179,19 @@ local function fetchAuthored(repositories: { [string]: string }, run: types.Comm
 end
 
 -- Each gh call costs about a second, so jobs share a small pool of concurrent workers.
-local function runConcurrently(jobs: { () -> { PullRequest } }): { PullRequest }
+-- A job that raises contributes nothing; it or a job reporting partial data marks the result incomplete.
+local function runConcurrently(jobs: { () -> ({ PullRequest }, boolean) }): ({ PullRequest }, boolean)
 	local results: { { PullRequest } } = {}
+	local complete = true
 	local nextJob = 1
 	local active = 0
 	local function work()
 		while nextJob <= #jobs do
 			local index = nextJob
 			nextJob += 1
-			local ok, value = pcall(jobs[index])
+			local ok, value, jobComplete = pcall(jobs[index])
 			results[index] = if ok then value else {}
+			complete = complete and ok and jobComplete
 		end
 		active -= 1
 	end
@@ -194,11 +207,12 @@ local function runConcurrently(jobs: { () -> { PullRequest } }): { PullRequest }
 	for _, batch in results do
 		table.move(batch, 1, #batch, #result + 1, result)
 	end
-	return result
+	return result, complete
 end
 
 -- PRs for the given worktrees' branches, plus the viewer's open PRs in the same repositories.
-local function listPullRequests(worktrees: { types.Worktree }, runner: types.CommandRunner?): { PullRequest }
+-- The second result is false when any GitHub query failed, so callers can avoid caching partial data.
+local function listPullRequests(worktrees: { types.Worktree }, runner: types.CommandRunner?): ({ PullRequest }, boolean)
 	local run = runner or defaultRun
 	local repositories: { [string]: string } = {}
 	local lookups: { Lookup } = {}
@@ -216,12 +230,12 @@ local function listPullRequests(worktrees: { types.Worktree }, runner: types.Com
 		end
 	end
 	if next(repositories) == nil then
-		return {}
+		return {}, true
 	end
 
-	local jobs: { () -> { PullRequest } } = {
+	local jobs: { () -> ({ PullRequest }, boolean) } = {
 		function()
-			return fetchAuthored(repositories, run)
+			return fetchAuthored(repositories, run), true
 		end,
 	}
 	for start = 1, #lookups, BATCH_SIZE do
